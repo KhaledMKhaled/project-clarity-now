@@ -52,9 +52,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 import { paymentStatusColors, shipmentStatusColors } from "@/lib/colorMaps";
-import type { Shipment } from "@shared/schema";
+import { supabase } from "@/integrations/supabase/client";
+import type { Shipment } from "@/types/database";
 
 export default function Shipments() {
   const [search, setSearch] = useState("");
@@ -67,8 +68,16 @@ export default function Shipments() {
   const [viewArchived, setViewArchived] = useState(false);
   const { toast } = useToast();
 
-  const { data: shipments, isLoading } = useQuery<Shipment[]>({
-    queryKey: ["/api/shipments"],
+  const { data: shipments, isLoading } = useQuery({
+    queryKey: ["shipments"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shipments")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data as Shipment[];
+    },
   });
 
   const activeShipments = shipments?.filter((shipment) => shipment.status !== "مؤرشفة");
@@ -81,12 +90,13 @@ export default function Shipments() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
-      return apiRequest("DELETE", `/api/shipments/${id}`);
+      const { error } = await supabase.from("shipments").delete().eq("id", id);
+      if (error) throw error;
     },
     onSuccess: () => {
       toast({ title: "تم حذف الشحنة بنجاح" });
-      queryClient.invalidateQueries({ queryKey: ["/api/shipments"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["shipments"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       setDeleteDialogOpen(false);
       setShipmentToDelete(null);
     },
@@ -97,14 +107,16 @@ export default function Shipments() {
 
   const statusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: number; status: string }) => {
-      return apiRequest("PATCH", `/api/shipments/${id}` , {
-        shipmentData: { status },
-      });
+      const { error } = await supabase
+        .from("shipments")
+        .update({ status })
+        .eq("id", id);
+      if (error) throw error;
     },
     onSuccess: () => {
       toast({ title: viewArchived ? "تم إلغاء الأرشفة" : "تمت أرشفة الشحنة" });
-      queryClient.invalidateQueries({ queryKey: ["/api/shipments"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["shipments"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
     },
     onError: () => {
       toast({ title: "تعذر تحديث حالة الشحنة", variant: "destructive" });
@@ -135,13 +147,21 @@ export default function Shipments() {
     return new Date(date).toLocaleDateString("ar-EG");
   };
 
+  const getPaymentStatus = (shipment: Shipment) => {
+    const cost = parseFloat(String(shipment.final_total_cost_egp || 0));
+    const paid = parseFloat(String(shipment.total_paid_egp || 0));
+    if (paid <= 0) return "لم يتم دفع أي مبلغ";
+    if (paid >= cost) return "مسددة بالكامل";
+    return "مدفوعة جزئياً";
+  };
+
   const baseShipments = viewArchived ? archivedShipments : activeShipments;
 
   const filteredShipments = baseShipments?.filter((shipment) => {
     const matchesSearch =
       !search ||
-      shipment.shipmentName.toLowerCase().includes(search.toLowerCase()) ||
-      shipment.shipmentCode.toLowerCase().includes(search.toLowerCase());
+      shipment.shipment_name.toLowerCase().includes(search.toLowerCase()) ||
+      shipment.shipment_code.toLowerCase().includes(search.toLowerCase());
     const matchesStatus =
       statusFilter === "all" || shipment.status === statusFilter;
 
@@ -149,10 +169,9 @@ export default function Shipments() {
     const matchesPaymentStatus =
       paymentStatusFilter === "all" || paymentStatus === paymentStatusFilter;
     
-    // Date range filter
     let matchesDateRange = true;
     if (dateFrom || dateTo) {
-      const purchaseDate = shipment.purchaseDate ? new Date(shipment.purchaseDate) : null;
+      const purchaseDate = shipment.purchase_date ? new Date(shipment.purchase_date) : null;
       if (purchaseDate) {
         if (dateFrom) {
           const fromDate = new Date(dateFrom);
@@ -184,7 +203,7 @@ export default function Shipments() {
             <Button
               type="button"
               variant={viewArchived ? "outline" : "default"}
-              className={!viewArchived ? "rounded-none" : "rounded-none"}
+              className="rounded-none"
               onClick={() => setViewArchived(false)}
             >
               الشحنات النشطة
@@ -192,7 +211,7 @@ export default function Shipments() {
             <Button
               type="button"
               variant={viewArchived ? "default" : "outline"}
-              className={!viewArchived ? "rounded-none" : "rounded-none"}
+              className="rounded-none"
               onClick={() => setViewArchived(true)}
             >
               الشحنات المؤرشفة
@@ -330,10 +349,10 @@ export default function Shipments() {
                       data-testid={`row-shipment-${shipment.id}`}
                     >
                       <TableCell className="font-medium">
-                        {shipment.shipmentCode}
+                        {shipment.shipment_code}
                       </TableCell>
-                      <TableCell>{shipment.shipmentName}</TableCell>
-                      <TableCell>{formatDate(shipment.purchaseDate)}</TableCell>
+                      <TableCell>{shipment.shipment_name}</TableCell>
+                      <TableCell>{formatDate(shipment.purchase_date)}</TableCell>
                       <TableCell>
                         <StatusBadge status={shipment.status} />
                       </TableCell>
@@ -341,15 +360,15 @@ export default function Shipments() {
                         <PaymentStatusBadge status={getPaymentStatus(shipment)} />
                       </TableCell>
                       <TableCell>
-                        {formatCurrency(shipment.finalTotalCostEgp)}
+                        {formatCurrency(shipment.final_total_cost_egp)}
                       </TableCell>
                       <TableCell>
-                        {formatCurrency(shipment.totalPaidEgp)}
+                        {formatCurrency(shipment.total_paid_egp)}
                       </TableCell>
                       <TableCell>
                         <BalanceBadge
-                          cost={shipment.finalTotalCostEgp}
-                          paid={shipment.totalPaidEgp}
+                          cost={shipment.final_total_cost_egp}
+                          paid={shipment.total_paid_egp}
                         />
                       </TableCell>
                       <TableCell>
@@ -367,32 +386,32 @@ export default function Shipments() {
                                 عرض
                               </Link>
                             </DropdownMenuItem>
-                          <DropdownMenuItem asChild>
-                            <Link href={`/shipments/${shipment.id}/edit`}>
-                              <Edit className="w-4 h-4 ml-2" />
-                              تعديل
-                            </Link>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() =>
-                              statusMutation.mutate({
-                                id: shipment.id,
-                                status: shipment.status === "مؤرشفة" ? "جديدة" : "مؤرشفة",
-                              })
-                            }
-                          >
-                            {shipment.status === "مؤرشفة" ? (
-                              <ArchiveRestore className="w-4 h-4 ml-2" />
-                            ) : (
-                              <Archive className="w-4 h-4 ml-2" />
-                            )}
-                            {shipment.status === "مؤرشفة" ? "إلغاء الأرشفة" : "أرشفة"}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="text-destructive"
-                            onClick={() => handleDeleteClick(shipment)}
-                          >
-                            <Trash2 className="w-4 h-4 ml-2" />
+                            <DropdownMenuItem asChild>
+                              <Link href={`/shipments/${shipment.id}/edit`}>
+                                <Edit className="w-4 h-4 ml-2" />
+                                تعديل
+                              </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() =>
+                                statusMutation.mutate({
+                                  id: shipment.id,
+                                  status: shipment.status === "مؤرشفة" ? "جديدة" : "مؤرشفة",
+                                })
+                              }
+                            >
+                              {shipment.status === "مؤرشفة" ? (
+                                <ArchiveRestore className="w-4 h-4 ml-2" />
+                              ) : (
+                                <Archive className="w-4 h-4 ml-2" />
+                              )}
+                              {shipment.status === "مؤرشفة" ? "إلغاء الأرشفة" : "أرشفة"}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={() => handleDeleteClick(shipment)}
+                            >
+                              <Trash2 className="w-4 h-4 ml-2" />
                               حذف
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -415,7 +434,7 @@ export default function Shipments() {
           <AlertDialogHeader>
             <AlertDialogTitle>تأكيد حذف الشحنة</AlertDialogTitle>
             <AlertDialogDescription>
-              هل أنت متأكد من حذف الشحنة "{shipmentToDelete?.shipmentName}"؟
+              هل أنت متأكد من حذف الشحنة "{shipmentToDelete?.shipment_name}"؟
               <br />
               هذا الإجراء لا يمكن التراجع عنه.
             </AlertDialogDescription>
@@ -451,53 +470,40 @@ function PaymentStatusBadge({ status }: { status: string }) {
   );
 }
 
-function BalanceBadge({
-  cost,
-  paid,
-}: {
-  cost: string | number | null;
-  paid: string | number | null;
-}) {
-  const costValue = typeof cost === "string" ? parseFloat(cost) : cost || 0;
-  const paidValue = typeof paid === "string" ? parseFloat(paid) : paid || 0;
-  const remaining = Math.max(0, costValue - paidValue);
+function BalanceBadge({ cost, paid }: { cost: number | null; paid: number | null }) {
+  const costNum = cost || 0;
+  const paidNum = paid || 0;
+  const balance = costNum - paidNum;
 
-  const formatCurrency = (num: number) =>
-    new Intl.NumberFormat("ar-EG", {
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat("ar-EG", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    }).format(num);
+    }).format(value);
+  };
 
-  if (remaining === 0) {
+  if (balance <= 0) {
     return (
-      <Badge
-        variant="outline"
-        className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-      >
+      <Badge variant="default" className="bg-green-500">
         مسددة
       </Badge>
     );
   }
 
   return (
-    <Badge
-      variant="outline"
-      className="bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
-    >
-      متبقي: {formatCurrency(remaining)} ج.م
-    </Badge>
+    <span className="text-destructive font-medium">
+      {formatCurrency(balance)} ج.م
+    </span>
   );
 }
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mb-6">
-        <Ship className="w-10 h-10 text-muted-foreground" />
-      </div>
-      <h3 className="text-xl font-medium mb-2">لا توجد شحنات</h3>
-      <p className="text-muted-foreground mb-6">
-        ابدأ بإضافة شحنتك الأولى لتتبع التكاليف والمدفوعات
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      <Ship className="w-16 h-16 text-muted-foreground mb-4" />
+      <h3 className="text-lg font-medium mb-2">لا توجد شحنات</h3>
+      <p className="text-muted-foreground mb-4">
+        لم يتم العثور على أي شحنات. ابدأ بإضافة شحنة جديدة.
       </p>
       <Button asChild>
         <Link href="/shipments/new">
@@ -509,21 +515,11 @@ function EmptyState() {
   );
 }
 
-function getPaymentStatus(shipment: Shipment) {
-  const cost = parseFloat(shipment.finalTotalCostEgp || "0");
-  const paid = parseFloat(shipment.totalPaidEgp || "0");
-  const balance = parseFloat(shipment.balanceEgp || (cost - paid).toString());
-
-  if (paid <= 0.0001) return "لم يتم دفع أي مبلغ";
-  if (balance <= 0.0001) return "مسددة بالكامل";
-  return "مدفوعة جزئياً";
-}
-
 function TableSkeleton() {
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {[1, 2, 3, 4, 5].map((i) => (
-        <Skeleton key={i} className="h-16 w-full" />
+        <Skeleton key={i} className="h-12 w-full" />
       ))}
     </div>
   );

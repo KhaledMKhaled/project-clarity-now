@@ -6,7 +6,6 @@ import {
   Calendar,
   DollarSign,
   TrendingUp,
-  Filter,
   Download,
   ChevronLeft,
   ChevronRight,
@@ -28,13 +27,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { InventoryMovement, ShipmentItem, Shipment, ShipmentShippingDetails } from "@shared/schema";
+import { supabase } from "@/integrations/supabase/client";
+import type { InventoryMovement, ShipmentItem, Shipment, ShipmentShippingDetails } from "@/types/database";
 
 interface InventoryStats {
   totalPieces: number;
-  totalCostEgp: string;
+  totalCostEgp: number;
   totalItems: number;
-  avgUnitCostEgp: string;
+  avgUnitCostEgp: number;
 }
 
 interface ExtendedInventoryMovement extends InventoryMovement {
@@ -51,17 +51,65 @@ export default function Inventory() {
   const [shipmentCodeFilter, setShipmentCodeFilter] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
-  const { data: stats, isLoading: loadingStats } = useQuery<InventoryStats>({
-    queryKey: ["/api/inventory/stats"],
+  const { data: movements, isLoading: loadingMovements } = useQuery({
+    queryKey: ["inventory-movements"],
+    queryFn: async () => {
+      const { data: movementsData, error: movementsError } = await supabase
+        .from("inventory_movements")
+        .select("*")
+        .order("movement_date", { ascending: false });
+      if (movementsError) throw movementsError;
+
+      // Fetch related data
+      const shipmentItemIds = [...new Set(movementsData.map((m) => m.shipment_item_id).filter(Boolean))];
+      const shipmentIds = [...new Set(movementsData.map((m) => m.shipment_id).filter(Boolean))];
+
+      const [shipmentItemsRes, shipmentsRes, shippingDetailsRes] = await Promise.all([
+        shipmentItemIds.length > 0
+          ? supabase.from("shipment_items").select("*").in("id", shipmentItemIds)
+          : { data: [] },
+        shipmentIds.length > 0
+          ? supabase.from("shipments").select("*").in("id", shipmentIds)
+          : { data: [] },
+        shipmentIds.length > 0
+          ? supabase.from("shipment_shipping_details").select("*").in("shipment_id", shipmentIds)
+          : { data: [] },
+      ]);
+
+      const shipmentItems = (shipmentItemsRes.data || []) as ShipmentItem[];
+      const shipments = (shipmentsRes.data || []) as Shipment[];
+      const shippingDetails = (shippingDetailsRes.data || []) as ShipmentShippingDetails[];
+
+      // Calculate total pieces per shipment
+      const { data: allItems } = await supabase.from("shipment_items").select("shipment_id, total_pieces_cou");
+      const shipmentPiecesMap: Record<number, number> = {};
+      allItems?.forEach((item: any) => {
+        if (item.shipment_id) {
+          shipmentPiecesMap[item.shipment_id] = (shipmentPiecesMap[item.shipment_id] || 0) + (item.total_pieces_cou || 0);
+        }
+      });
+
+      return movementsData.map((m) => ({
+        ...m,
+        shipmentItem: shipmentItems.find((si) => si.id === m.shipment_item_id),
+        shipment: shipments.find((s) => s.id === m.shipment_id),
+        shippingDetails: shippingDetails.find((sd) => sd.shipment_id === m.shipment_id),
+        totalShipmentPieces: m.shipment_id ? shipmentPiecesMap[m.shipment_id] || 0 : 0,
+      })) as ExtendedInventoryMovement[];
+    },
   });
 
-  const { data: movements, isLoading: loadingMovements } = useQuery<
-    ExtendedInventoryMovement[]
-  >({
-    queryKey: ["/api/inventory"],
-  });
+  // Calculate stats
+  const stats: InventoryStats = {
+    totalItems: movements?.length || 0,
+    totalPieces: movements?.reduce((sum, m) => sum + (m.total_pieces_in || 0), 0) || 0,
+    totalCostEgp: movements?.reduce((sum, m) => sum + m.total_cost_egp, 0) || 0,
+    avgUnitCostEgp:
+      movements && movements.length > 0
+        ? movements.reduce((sum, m) => sum + m.unit_cost_egp, 0) / movements.length
+        : 0,
+  };
 
-  // Calculate cost per piece based on the formulas
   const calculateCostPerPiece = (movement: ExtendedInventoryMovement) => {
     const item = movement.shipmentItem;
     const shipment = movement.shipment;
@@ -69,35 +117,33 @@ export default function Inventory() {
     const totalShipmentPieces = movement.totalShipmentPieces || 0;
 
     if (!item || !shipment) {
-      return { purchasePriceRmb: 0, shippingShareRmb: 0, commissionShareRmb: 0, clearanceShareEgp: 0, customsPerPieceEgp: 0, finalCostEgp: 0, exchangeRate: 0 };
+      return {
+        purchasePriceRmb: 0,
+        shippingShareRmb: 0,
+        commissionShareRmb: 0,
+        clearanceShareEgp: 0,
+        customsPerPieceEgp: 0,
+        finalCostEgp: 0,
+        exchangeRate: 0,
+      };
     }
 
-    // Exchange rate from shipment
-    const exchangeRate = parseFloat(shipment.purchaseRmbToEgpRate?.toString() || "0");
-    
-    // Purchase price per piece in RMB
-    const purchasePriceRmb = parseFloat(item.purchasePricePerPiecePriRmb?.toString() || "0");
-    
-    // Shipping share per piece = Total shipping cost RMB / Total pieces in shipment
-    const totalShippingCostRmb = parseFloat(shippingDetails?.totalShippingCostRmb?.toString() || "0");
+    const exchangeRate = parseFloat(String(shipment.purchase_rmb_to_egp_rate || 0));
+    const purchasePriceRmb = parseFloat(String(item.purchase_price_per_piece_pri_rmb || 0));
+    const totalShippingCostRmb = parseFloat(String(shippingDetails?.total_shipping_cost_rmb || 0));
     const shippingShareRmb = totalShipmentPieces > 0 ? totalShippingCostRmb / totalShipmentPieces : 0;
-    
-    // Commission share per piece = Total commission cost RMB / Total pieces in shipment
-    const commissionValueRmb = parseFloat(shippingDetails?.commissionValueRmb?.toString() || "0");
+    const commissionValueRmb = parseFloat(String(shippingDetails?.commission_value_rmb || 0));
     const commissionShareRmb = totalShipmentPieces > 0 ? commissionValueRmb / totalShipmentPieces : 0;
-    
-    // Clearance (Takhreeg) share per piece = Total Takhreeg Cost / Total pieces for item
-    const totalTakhreegCost = parseFloat(item.totalTakhreegCostEgp?.toString() || "0");
-    const itemPieces = item.totalPiecesCou || 0;
+    const totalTakhreegCost = parseFloat(String(item.total_takhreeg_cost_egp || 0));
+    const itemPieces = item.total_pieces_cou || 0;
     const clearanceShareEgp = itemPieces > 0 ? totalTakhreegCost / itemPieces : 0;
-    
-    // Customs per piece = Total Customs Cost / Total pieces for item
-    const totalCustomsCost = parseFloat(item.totalCustomsCostEgp?.toString() || "0");
+    const totalCustomsCost = parseFloat(String(item.total_customs_cost_egp || 0));
     const customsPerPieceEgp = itemPieces > 0 ? totalCustomsCost / itemPieces : 0;
-    
-    // Final formula: (Purchase price in RMB + Shipping share in RMB + Commission share in RMB) × Exchange rate + Customs + Clearance share in EGP
-    const finalCostEgp = ((purchasePriceRmb + shippingShareRmb + commissionShareRmb) * exchangeRate) + customsPerPieceEgp + clearanceShareEgp;
-    
+    const finalCostEgp =
+      (purchasePriceRmb + shippingShareRmb + commissionShareRmb) * exchangeRate +
+      customsPerPieceEgp +
+      clearanceShareEgp;
+
     return {
       purchasePriceRmb,
       shippingShareRmb,
@@ -125,17 +171,16 @@ export default function Inventory() {
   const filteredMovements = movements?.filter((m) => {
     const matchesSearch =
       !search ||
-      m.shipmentItem?.productName?.toLowerCase().includes(search.toLowerCase()) ||
-      m.shipment?.shipmentCode?.toLowerCase().includes(search.toLowerCase());
+      m.shipmentItem?.product_name?.toLowerCase().includes(search.toLowerCase()) ||
+      m.shipment?.shipment_code?.toLowerCase().includes(search.toLowerCase());
 
     const matchesShipmentCode =
       !shipmentCodeFilter ||
-      m.shipment?.shipmentCode?.toLowerCase().includes(shipmentCodeFilter.toLowerCase());
+      m.shipment?.shipment_code?.toLowerCase().includes(shipmentCodeFilter.toLowerCase());
 
-    // Date range filter
     let matchesDateRange = true;
     if (dateFrom || dateTo) {
-      const movementDate = m.movementDate ? new Date(m.movementDate) : null;
+      const movementDate = m.movement_date ? new Date(m.movement_date) : null;
       if (movementDate) {
         if (dateFrom) {
           const fromDate = new Date(dateFrom);
@@ -152,18 +197,11 @@ export default function Inventory() {
     return matchesSearch && matchesShipmentCode && matchesDateRange;
   });
 
-  // Pagination
   const totalPages = Math.ceil((filteredMovements?.length || 0) / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const paginatedMovements = filteredMovements?.slice(startIndex, endIndex);
 
-  // Reset to page 1 when filters change
-  const handleFilterChange = () => {
-    setCurrentPage(1);
-  };
-
-  // CSV Export function
   const exportToCSV = () => {
     if (!filteredMovements || filteredMovements.length === 0) return;
 
@@ -181,13 +219,13 @@ export default function Inventory() {
       headers.join(","),
       ...filteredMovements.map((m) =>
         [
-          m.movementDate ? new Date(m.movementDate).toLocaleDateString("ar-EG") : "-",
-          m.shipment?.shipmentCode || "-",
-          m.shipmentItem?.productName || "-",
-          m.totalPiecesIn || 0,
-          m.unitCostRmb || "-",
-          m.unitCostEgp || 0,
-          m.totalCostEgp || 0,
+          m.movement_date ? new Date(m.movement_date).toLocaleDateString("ar-EG") : "-",
+          m.shipment?.shipment_code || "-",
+          m.shipmentItem?.product_name || "-",
+          m.total_pieces_in || 0,
+          m.unit_cost_rmb || "-",
+          m.unit_cost_egp || 0,
+          m.total_cost_egp || 0,
         ].join(",")
       ),
     ].join("\n");
@@ -208,12 +246,11 @@ export default function Inventory() {
       {/* Header */}
       <div>
         <h1 className="text-3xl font-semibold">المخزون</h1>
-        <p className="text-muted-foreground mt-1">
-          متابعة الأصناف المستلمة وتكلفتها في المخزون
-        </p>
+        <p className="text-muted-foreground mt-1">متابعة الأصناف المستلمة وتكلفتها في المخزون</p>
       </div>
+
       {/* Stats Cards */}
-      {loadingStats ? (
+      {loadingMovements ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
             <Skeleton key={i} className="h-28" />
@@ -221,28 +258,25 @@ export default function Inventory() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard
-            title="إجمالي الأصناف"
-            value={stats?.totalItems?.toString() || "0"}
-            icon={Package}
-          />
+          <StatCard title="إجمالي الأصناف" value={stats.totalItems.toString()} icon={Package} />
           <StatCard
             title="إجمالي القطع"
-            value={new Intl.NumberFormat("ar-EG").format(stats?.totalPieces || 0)}
+            value={new Intl.NumberFormat("ar-EG").format(stats.totalPieces)}
             icon={Ship}
           />
           <StatCard
             title="إجمالي التكلفة"
-            value={`${formatCurrency(stats?.totalCostEgp || 0)} ج.م`}
+            value={`${formatCurrency(stats.totalCostEgp)} ج.م`}
             icon={DollarSign}
           />
           <StatCard
             title="متوسط تكلفة الوحدة"
-            value={`${formatCurrency(stats?.avgUnitCostEgp || 0)} ج.م`}
+            value={`${formatCurrency(stats.avgUnitCostEgp)} ج.م`}
             icon={TrendingUp}
           />
         </div>
       )}
+
       {/* Filters */}
       <Card>
         <CardContent className="p-4">
@@ -319,6 +353,7 @@ export default function Inventory() {
           </div>
         </CardContent>
       </Card>
+
       {/* Inventory Table */}
       <Card>
         <CardHeader className="pb-4 flex flex-row items-center justify-between gap-4">
@@ -367,47 +402,34 @@ export default function Inventory() {
                     {paginatedMovements?.map((movement) => {
                       const costs = calculateCostPerPiece(movement);
                       return (
-                        <TableRow
-                          key={movement.id}
-                          data-testid={`row-inventory-${movement.id}`}
-                        >
+                        <TableRow key={movement.id} data-testid={`row-inventory-${movement.id}`}>
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <Calendar className="w-4 h-4 text-muted-foreground" />
-                              {formatDate(movement.movementDate)}
+                              {formatDate(movement.movement_date)}
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline">
-                              {movement.shipment?.shipmentCode || "-"}
-                            </Badge>
+                            <Badge variant="outline">{movement.shipment?.shipment_code || "-"}</Badge>
                           </TableCell>
                           <TableCell className="font-medium">
-                            {movement.shipmentItem?.productName || "-"}
+                            {movement.shipmentItem?.product_name || "-"}
                           </TableCell>
                           <TableCell>
-                            {new Intl.NumberFormat("ar-EG").format(
-                              movement.totalPiecesIn || 0
-                            )}
+                            {new Intl.NumberFormat("ar-EG").format(movement.total_pieces_in || 0)}
                           </TableCell>
                           <TableCell>
                             <div className="flex flex-col gap-1">
                               <span>¥ {formatCurrency(costs.purchasePriceRmb || 0)}</span>
-                              <span className="text-xs text-muted-foreground">السعر: {formatCurrency(costs.exchangeRate)}</span>
+                              <span className="text-xs text-muted-foreground">
+                                السعر: {formatCurrency(costs.exchangeRate)}
+                              </span>
                             </div>
                           </TableCell>
-                          <TableCell>
-                            ¥ {formatCurrency(costs.shippingShareRmb)}
-                          </TableCell>
-                          <TableCell>
-                            ¥ {formatCurrency(costs.commissionShareRmb)}
-                          </TableCell>
-                          <TableCell>
-                            {formatCurrency(costs.customsPerPieceEgp)} ج.م
-                          </TableCell>
-                          <TableCell>
-                            {formatCurrency(costs.clearanceShareEgp)} ج.م
-                          </TableCell>
+                          <TableCell>¥ {formatCurrency(costs.shippingShareRmb)}</TableCell>
+                          <TableCell>¥ {formatCurrency(costs.commissionShareRmb)}</TableCell>
+                          <TableCell>{formatCurrency(costs.customsPerPieceEgp)} ج.م</TableCell>
+                          <TableCell>{formatCurrency(costs.clearanceShareEgp)} ج.م</TableCell>
                           <TableCell className="font-bold text-primary">
                             {formatCurrency(costs.finalCostEgp)} ج.م
                           </TableCell>
@@ -466,9 +488,6 @@ export default function Inventory() {
                     التالي
                     <ChevronLeft className="w-4 h-4" />
                   </Button>
-                  <span className="text-sm text-muted-foreground mr-4">
-                    صفحة {currentPage} من {totalPages}
-                  </span>
                 </div>
               )}
             </div>
@@ -481,25 +500,17 @@ export default function Inventory() {
   );
 }
 
-function StatCard({
-  title,
-  value,
-  icon: Icon,
-}: {
-  title: string;
-  value: string;
-  icon: typeof Package;
-}) {
+function StatCard({ title, value, icon: Icon }: { title: string; value: string; icon: any }) {
   return (
     <Card>
-      <CardContent className="p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex flex-col gap-2">
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between">
+          <div>
             <p className="text-sm text-muted-foreground">{title}</p>
-            <p className="text-2xl font-bold">{value}</p>
+            <p className="text-2xl font-bold mt-1">{value}</p>
           </div>
-          <div className="w-12 h-12 rounded-md bg-primary/10 flex items-center justify-center">
-            <Icon className="w-6 h-6 text-primary" />
+          <div className="p-3 rounded-full bg-muted">
+            <Icon className="w-5 h-5" />
           </div>
         </div>
       </CardContent>
@@ -509,21 +520,17 @@ function StatCard({
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mb-6">
-        <Package className="w-10 h-10 text-muted-foreground" />
-      </div>
-      <h3 className="text-xl font-medium mb-2">لا توجد حركات مخزون</h3>
-      <p className="text-muted-foreground">
-        ستظهر الأصناف هنا بعد استلام الشحنات
-      </p>
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      <Package className="w-16 h-16 text-muted-foreground mb-4" />
+      <h3 className="text-lg font-medium mb-2">لا توجد حركات مخزون</h3>
+      <p className="text-muted-foreground">لم يتم استلام أي أصناف في المخزون بعد</p>
     </div>
   );
 }
 
 function TableSkeleton() {
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {[1, 2, 3, 4, 5].map((i) => (
         <Skeleton key={i} className="h-12 w-full" />
       ))}
