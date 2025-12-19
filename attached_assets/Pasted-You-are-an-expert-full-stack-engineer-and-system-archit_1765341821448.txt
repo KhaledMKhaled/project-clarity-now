@@ -1,0 +1,650 @@
+You are an expert full-stack engineer and system architect.
+
+Your task:
+Design and implement a complete multi-user web application for **shipment costing, inventory, and payments settlement**.
+
+Important:
+- All user-facing UI (labels, menus, messages, tooltips, buttons) must be in **Arabic only**, RTL.
+- This specification is written in English for clarity.
+
+The system will manage:
+1) Shipments and their items.
+2) Shipping, customs, and takhreeg (clearance).
+3) Final costing in EGP and RMB.
+4) Payments towards shipment cost (including overpayments).
+5) Basic integration with inventory.
+
+The system operates with ONLY TWO core currencies:
+- RMB (Chinese Yuan / رممبي)
+- EGP (Egyptian Pound / جنيه مصري)
+
+Any USD values (e.g., shipping invoices) are stored as **original reference amounts before conversion**, but core accounting and balances are in RMB and EGP.
+
+Project name: Repit.AI – Shipments, Costing, and Payments
+
+==================================================
+1. GENERAL REQUIREMENTS
+==================================================
+
+1.1. Architecture
+- Use a standard web stack:
+  - Relational database (e.g., PostgreSQL / MySQL).
+  - Backend API layer enforcing all business rules.
+  - Frontend SPA (e.g., React/Vue/Angular) with Arabic RTL UI.
+- Separation of concerns:
+  - Data layer (DB + models).
+  - Business logic / services.
+  - Presentation (UI).
+
+1.2. Localization
+- Entire UI is Arabic-only and RTL:
+  - Page titles, menus, labels, messages, tooltips, errors, confirmations.
+- Use meaningful Arabic names, e.g.:
+  - "الشحنات"
+  - "استيراد الشحنة"
+  - "بيانات الشحن"
+  - "الجمارك والتخريج"
+  - "ملخص الشحنة"
+  - "سداد الشحنات"
+
+1.3. Roles & Permissions (RBAC)
+- Implement:
+  - users
+  - roles
+  - user_roles (many-to-many)
+- Roles (minimum):
+  1) "مدير" (Admin)
+     - Full access to all modules.
+     - Manage users, roles, exchange rates, and see audit logs.
+  2) "محاسب" (Accountant)
+     - Full access to shipments, costing steps, and payments.
+  3) "مسؤول مخزون" (Inventory Manager)
+     - View shipments and summary.
+     - Trigger posting to inventory when shipment is received.
+  4) "مشاهد" (Viewer)
+     - Read-only access to shipments, summary, and payment overview.
+
+1.4. Main Menu & Tooltips
+Main menu (Arabic labels, with tooltips on hover), for example:
+
+- "الشحنات"
+  - Tooltip: "إدارة جميع الشحنات من لحظة الشراء حتى الاستلام"
+- "الموردون"
+  - Tooltip: "إضافة وتعديل بيانات الموردين المرتبطين بكل صنف"
+- "أسعار الصرف"
+  - Tooltip: "إدارة أسعار تحويل العملات بين الرممبي والجنيه وباقي العملات"
+- "المخزون"
+  - Tooltip: "متابعة الأصناف المستلمة وتكلفتها في المخزون"
+- "سداد الشحنات"
+  - Tooltip: "متابعة إجمالي ما تم دفعه وما هو متبقي على جميع الشحنات"
+- "المستخدمون والصلاحيات"
+  - Tooltip: "إدارة حسابات المستخدمين والصلاحيات"
+
+1.5. Audit Logging
+- Create `audit_logs` table:
+  - id
+  - user_id
+  - entity_type (e.g., "Shipment", "ShipmentItem", "ShipmentPayment", "ExchangeRate")
+  - entity_id
+  - action_type ("CREATE", "UPDATE", "DELETE", "STATUS_CHANGE")
+  - timestamp
+  - details (JSON/text before/after)
+- Log:
+  - All changes to financial fields.
+  - All status changes of shipments.
+  - All payment operations.
+
+==================================================
+2. CORE DATA MODEL
+==================================================
+
+2.1. Suppliers (الموردون)
+- suppliers:
+  - id (PK)
+  - name (Arabic, required)
+  - description (Arabic, optional)
+  - country (Arabic, e.g. "الصين")
+  - phone, email (optional)
+  - address (Arabic, optional)
+  - is_active (bool)
+  - created_at, updated_at
+
+2.2. Products (الأصناف) – optional but recommended
+- products:
+  - id (PK)
+  - name (Arabic, required) – product name
+  - type (Arabic) – TYP: general category (e.g., "أحذية", "حلويات", "ملابس")
+  - default_image_url (optional)
+  - default_supplier_id (FK suppliers, optional)
+  - created_at, updated_at
+
+2.3. Shipments (الشحنات)
+- shipments:
+  - id (PK)
+  - shipment_code (string, unique)
+  - shipment_name (Arabic)
+  - purchase_date (date)
+  - status (enum Arabic):
+    - "جديدة"
+    - "في انتظار الشحن"
+    - "جاهزة للاستلام"
+    - "مستلمة بنجاح"
+  - invoice_customs_date (date, optional) – customs/takhreeg invoice date, used for search.
+  - created_by_user_id (FK users)
+  - created_at, updated_at
+
+2.4. Shipment Items – Import Step (الاستيراد)
+Each row represents an item within a shipment.
+
+- shipment_items:
+  - id (PK)
+  - shipment_id (FK shipments)
+  - supplier_id (FK suppliers) – each item may have its own supplier.
+  - product_id (FK products, optional)
+  - product_type (Arabic string) – TYP (general category)
+  - product_name (Arabic string) – full name of the product
+  - description (Arabic, optional)
+  - country_of_origin (Arabic, e.g. "الصين")
+  - image_url (optional)
+  - cartons_ctn (integer) – CTN: number of cartons
+  - pieces_per_carton_pcs (integer) – PCS: pieces per carton
+  - total_pieces_cou (integer) – COU = CTN * PCS (calculated)
+  - purchase_price_per_piece_pri_rmb (decimal) – PRI, in RMB
+  - total_purchase_cost_rmb (decimal) – COU * PRI (calculated)
+  - customs_cost_per_carton_egp (decimal, optional) – input at customs/takhreeg step
+  - total_customs_cost_egp (decimal, optional) – CTN * customs_cost_per_carton_egp
+  - takhreeg_cost_per_carton_egp (decimal, optional) – تخريج (not “clearance”)
+  - total_takhreeg_cost_egp (decimal, optional) – CTN * takhreeg_cost_per_carton_egp
+  - created_at, updated_at
+
+2.5. Shipping Details – Shipping Step (بيانات الشحن)
+One shipping record per shipment.
+
+- shipment_shipping_details:
+  - id (PK)
+  - shipment_id (FK shipments, unique)
+  - total_purchase_cost_rmb (decimal, read-only)
+    - Sum of all shipment_items.total_purchase_cost_rmb
+  - commission_rate_percent (decimal)
+  - commission_value_rmb (decimal) – calculated on total_purchase_cost_rmb only
+  - commission_value_egp (decimal) – converted RMB→EGP
+  - shipping_area_sqm (decimal)
+  - shipping_cost_per_sqm_usd_original (decimal, optional)
+    - Original shipping cost per sqm in USD (reference only)
+  - total_shipping_cost_usd_original (decimal, optional)
+    - Original total shipping cost in USD (reference only)
+  - total_shipping_cost_rmb (decimal) – after USD→RMB conversion
+  - total_shipping_cost_egp (decimal) – after RMB→EGP conversion
+  - shipping_date (date)
+  - rmb_to_egp_rate_at_shipping (decimal)
+  - usd_to_rmb_rate_at_shipping (decimal, optional)
+  - source_of_rates (text, e.g. "API")
+  - created_at, updated_at
+
+2.6. Customs & Takhreeg – Customs Step (الجمارك والتخريج)
+Header summary for shipment-level totals:
+
+- shipment_customs_details:
+  - id (PK)
+  - shipment_id (FK shipments, unique)
+  - total_customs_cost_egp (decimal) – sum of shipment_items.total_customs_cost_egp
+  - total_takhreeg_cost_egp (decimal) – sum of shipment_items.total_takhreeg_cost_egp
+  - customs_invoice_date (date)
+  - created_at, updated_at
+
+2.7. Exchange Rates (أسعار الصرف)
+Store all used currency rates and never reuse different values for the same historical transaction.
+
+- exchange_rates:
+  - id (PK)
+  - rate_date (date)
+  - from_currency (string, e.g. "USD", "RMB")
+  - to_currency (string, e.g. "RMB", "EGP")
+  - rate_value (decimal)
+  - source (string, e.g. "Google API")
+  - created_at
+
+The system should use the stored rate that matches the date and currencies when calculating conversions. If no rate exists for that date, it should allow manual entry and then store it.
+
+2.8. Currency Conversions (optional but recommended)
+- currency_conversions (optional helper table):
+  - id (PK)
+  - related_entity_type (e.g. "Shipping", "Payment")
+  - related_entity_id
+  - conversion_date
+  - amount_original
+  - from_currency
+  - to_currency
+  - exchange_rate_used
+  - amount_converted
+  - created_at
+
+2.9. Inventory Movements (basic integration)
+Once a shipment is received:
+
+- inventory_movements:
+  - id (PK)
+  - shipment_id (FK shipments)
+  - shipment_item_id (FK shipment_items)
+  - product_id (FK products, optional)
+  - total_pieces_in (integer)
+  - unit_cost_rmb (decimal, optional)
+  - unit_cost_egp (decimal, required)
+  - total_cost_egp (decimal)
+  - movement_date (date)
+  - created_at
+
+==================================================
+3. FINAL SHIPMENT COST IN EGP
+==================================================
+
+For each shipment, define and store a clear cost breakdown in EGP:
+
+- purchase_cost_egp       // from RMB via RMB→EGP at purchase_date
+- commission_cost_egp     // from RMB via RMB→EGP
+- shipping_cost_egp       // from RMB via conversions for shipping
+- customs_cost_egp        // sum of customs costs
+- takhreeg_cost_egp       // sum of takhreeg costs
+
+Final total cost in EGP:
+
+- final_total_cost_egp =
+    purchase_cost_egp
+  + commission_cost_egp
+  + shipping_cost_egp
+  + customs_cost_egp
+  + takhreeg_cost_egp
+
+Where relevant, also maintain RMB equivalents:
+
+- purchase_cost_rmb
+- commission_cost_rmb
+- shipping_cost_rmb
+
+These will be shown in shipment summary screens.
+
+==================================================
+4. PAYMENTS MODULE (سداد الشحنات)
+==================================================
+
+4.1. Shipment Payments Table
+
+Create `shipment_payments`:
+
+- id (PK)
+- shipment_id (FK shipments.id) – required; each payment belongs to one shipment.
+- payment_date (datetime)
+- payment_currency (string/enum: "RMB" or "EGP")
+- amount_original (decimal)
+  - The amount as paid in original currency.
+- exchange_rate_to_egp (decimal, nullable)
+  - If payment_currency = "EGP": can be null or 1.
+  - If payment_currency = "RMB": required; used to convert to EGP.
+- amount_egp (decimal)
+  - If payment_currency = "EGP": amount_egp = amount_original.
+  - If payment_currency = "RMB": amount_egp = amount_original * exchange_rate_to_egp.
+- payment_method (enum or FK):
+  - "نقدي"
+  - "فودافون كاش"
+  - "إنستاباي"
+  - "تحويل بنكي"
+  - "أخرى"
+- cash_receiver_name (string, nullable)
+  - **Required** if payment_method = "نقدي".
+- reference_number (string, nullable)
+  - For non-cash payments (transaction ID, etc.).
+- note (text, optional)
+- attachment_url (string, optional) – receipt/screenshot.
+- created_by_user_id (FK users)
+- created_at, updated_at
+
+Overpayment:
+- System must allow payments where `amount_egp` causes total_paid_egp > final_total_cost_egp.
+- This creates a negative balance (overpaid/credit).
+
+4.2. Aggregated Payment Fields on Shipments
+
+Extend `shipments` with:
+
+- final_total_cost_egp        // defined above
+- total_paid_egp              // sum of shipment_payments.amount_egp
+- balance_egp                 // final_total_cost_egp - total_paid_egp
+- last_payment_date           // latest payment_date for that shipment (or null)
+
+Interpretation:
+- balance_egp > 0 → amount still owed.
+- balance_egp = 0 → fully settled.
+- balance_egp < 0 → overpaid; credit in favor of the user.
+
+The system should update these values whenever payments are created/updated/deleted.
+
+==================================================
+5. WORKFLOW & BUSINESS LOGIC
+==================================================
+
+5.1. Shipment Status Flow
+
+- When created:
+  - status = "جديدة"
+- After import step (items) completed and saved:
+  - status = "جديدة" (but shipping step enabled).
+- After shipping details saved:
+  - status = "جاهزة للاستلام"
+- After customs & takhreeg completed and saved:
+  - status = "مستلمة بنجاح"
+  - Trigger creation of inventory_movements with calculated unit costs.
+
+5.2. Import Step – Shipment Items (الاستيراد)
+
+Per shipment:
+- User can add up to ~100 items.
+
+Required fields per item:
+- Supplier (dropdown from suppliers + ability to add new).
+- Product type (TYP).
+- Product name.
+- Country of origin.
+- CTN (cartons).
+- PCS (pieces per carton).
+- PRI (purchase price per piece in RMB).
+
+System automatically:
+- COU = CTN * PCS.
+- Total purchase cost per item (RMB) = COU * PRI.
+- Total purchase cost per shipment (RMB) = sum of item totals.
+
+5.3. Shipping Step (بيانات الشحن)
+
+Inputs:
+- Commission rate (%) – on total purchase cost in RMB.
+- Shipping area (sqm).
+- Shipping cost per sqm (USD, original).
+- Shipping date.
+
+System:
+- Calculates commission_value_rmb.
+- Converts commission_value_rmb → commission_value_egp using RMB→EGP rate.
+- Calculates original USD shipping value (if entered) and stores:
+  - shipping_cost_per_sqm_usd_original
+  - total_shipping_cost_usd_original
+- Converts USD→RMB (store usd_to_rmb_rate_at_shipping, total_shipping_cost_rmb).
+- Converts RMB→EGP (store rmb_to_egp_rate_at_shipping, total_shipping_cost_egp).
+- Stores exchange rate records in exchange_rates or logs conversion in currency_conversions.
+
+After saving shipping details:
+- Update shipment’s cost breakdown fields (commission_cost_egp, shipping_cost_egp).
+- Set status to "جاهزة للاستلام".
+
+5.4. Customs & Takhreeg Step (الجمارك والتخريج)
+
+For each item (shipment_item):
+
+- User inputs:
+  - customs_cost_per_carton_egp
+  - takhreeg_cost_per_carton_egp
+- System calculates:
+  - total_customs_cost_egp = cartons_ctn * customs_cost_per_carton_egp
+  - total_takhreeg_cost_egp = cartons_ctn * takhreeg_cost_per_carton_egp
+
+At shipment level:
+- total_customs_cost_egp = sum of items.total_customs_cost_egp
+- total_takhreeg_cost_egp = sum of items.total_takhreeg_cost_egp
+- User inputs:
+  - customs_invoice_date
+
+After saving:
+- Update shipments.invoice_customs_date.
+- Update cost breakdown for customs_cost_egp and takhreeg_cost_egp.
+- Set status = "مستلمة بنجاح".
+- Compute final_total_cost_egp and corresponding unit_cost_egp per item and create inventory_movements.
+
+==================================================
+6. UI SCREENS (ALL ARABIC, RTL)
+==================================================
+
+6.1. Shipments List (قائمة الشحنات)
+
+Columns:
+- "رقم الشحنة"
+- "اسم الشحنة"
+- "تاريخ الشراء"
+- "حالة الشحنة"
+- "إجمالي تكلفة الشحنة (جنيه مصري)"
+- "إجمالي المدفوع (جنيه مصري)"
+- "الرصيد (متبقي / مدفوع زيادة)"
+- "تاريخ فاتورة الجمارك" (إن وجد)
+
+Filters:
+- By shipment code/name
+- By status
+- By supplier
+- By purchase_date range
+- By customs_invoice_date range
+- By payment status (fully paid / has balance / overpaid)
+
+Actions:
+- "إضافة شحنة جديدة"
+- "عرض"
+- "تعديل"
+- "حذف" (Admin only)
+
+6.2. Shipment Details – Step 1: Import (الاستيراد)
+
+Header:
+- "اسم الشحنة"
+- "رقم الشحنة"
+- "تاريخ الشراء"
+- "حالة الشحنة" (read-only)
+
+Items grid:
+- صورة المنتج
+- المورد
+- بلد المنشأ
+- نوع الصنف (TYP)
+- اسم المنتج
+- عدد الكراتين (CTN)
+- عدد القطع في الكرتونة (PCS)
+- إجمالي القطع (COU) – calculated
+- تكلفة الشراء لكل قطعة (PRI, RMB)
+- إجمالي تكلفة البند (RMB) – calculated
+
+Summary:
+- "إجمالي تكلفة الشراء للشحنة (RMB)"
+
+Buttons:
+- "حفظ"
+- "التالي: بيانات الشحن"
+
+6.3. Shipment Details – Step 2: Shipping (الشحن)
+
+Show read-only:
+- "إجمالي تكلفة الشراء (RMB)"
+
+Inputs:
+- "نسبة العمولة %"
+- "مساحة الشحن (متر مربع)"
+- "تكلفة الشحن لكل متر مربع (دولار)" (أصل الفاتورة بالدولار)
+- "تاريخ الشحن"
+
+Calculated (read-only, highlighted):
+- "قيمة العمولة (RMB)"
+- "قيمة العمولة (جنيه مصري)"
+- "إجمالي تكلفة الشحن (دولار – قيمة مرجعية)"
+- "إجمالي تكلفة الشحن (RMB)"
+- "إجمالي تكلفة الشحن (جنيه مصري)"
+- "سعر صرف الرممبي للجنيه في تاريخ الشحن"
+- "سعر صرف الدولار إلى رممبي في تاريخ الشحن"
+
+Buttons:
+- "حفظ"
+- "التالي: الجمارك والتخريج"
+- "السابق"
+
+6.4. Shipment Details – Step 3: Customs & Takhreeg (الجمارك والتخريج)
+
+Items grid (extends import grid):
+
+- "سعر الجمرك للكرتونة (جنيه)"
+- "إجمالي الجمرك لهذا البند (جنيه)" (calculated)
+- "سعر التخريج للكرتونة (جنيه)"
+- "إجمالي التخريج لهذا البند (جنيه)" (calculated)
+
+Shipment-level fields:
+- "إجمالي تكلفة الجمارك للشحنة (جنيه)"
+- "إجمالي تكلفة التخريج للشحنة (جنيه)"
+- "تاريخ فاتورة الجمارك"
+
+Buttons:
+- "حفظ"
+- "إنهاء واستلام الشحنة"
+- "السابق"
+
+After complete:
+- status = "مستلمة بنجاح"
+- Post to inventory.
+
+6.5. Shipment Summary (ملخص الشحنة)
+
+Show:
+
+- Header: اسم الشحنة، رقم الشحنة، حالة الشحنة، تواريخ.
+- Items summary:
+  - إجمالي عدد الكراتين لكل نوع
+  - إجمالي عدد القطع لكل نوع
+- Cost breakdown:
+  - تكلفة الشراء:
+    - RMB + EGP + تاريخ الشراء + سعر الصرف المستخدم
+  - العمولة:
+    - RMB + EGP
+  - الشحن:
+    - RMB + EGP + تفاصيل المساحة وتاريخ الشحن
+  - الجمارك:
+    - إجمالي الجمارك (جنيه)
+  - التخريج:
+    - إجمالي التخريج (جنيه)
+  - "إجمالي تكلفة الشحنة (جنيه مصري)" النهائي.
+- Payment summary:
+  - "إجمالي المدفوع"
+  - "الرصيد (متبقي / مدفوع زيادة)"
+
+6.6. Shipment Payments Tab (داخل الشحنة – "سداد تكلفة الشحنة")
+
+Header summary:
+- Show cost breakdown in EGP:
+  - "تكلفة الشراء"
+  - "قيمة العمولة"
+  - "تكلفة الشحن"
+  - "إجمالي الجمارك"
+  - "إجمالي التخريج"
+  - "إجمالي تكلفة الشحنة (جنيه مصري)"
+- Payment summary:
+  - "إجمالي المدفوع (جنيه مصري)"
+  - "الرصيد الحالي" with:
+    - if >0: "متبقي عليك: X جنيه"
+    - if =0: "الشحنة مسددة بالكامل"
+    - if <0: "مدفوع زيادة: X جنيه"
+
+Payments table:
+- "تاريخ الدفع"
+- "المبلغ الأصلي" + currency (RMB/EGP)
+- "قيمة المبلغ بالجنيه المصري"
+- "طريقة الدفع"
+- "اسم مستلم الكاش" (if cash)
+- "الرقم المرجعي" (if non-cash)
+- "ملاحظات"
+- "الرصيد قبل الدفع" (computed)
+- "الرصيد بعد الدفع" (computed)
+- "مرفق" (link/icon if attachment exists)
+
+Add Payment form:
+- "تاريخ الدفع"
+- "عملة الدفع" (RMB / جنيه مصري)
+- "المبلغ الأصلي"
+- "سعر تحويل الرممبي إلى جنيه" (visible if currency = RMB)
+- "طريقة الدفع"
+  - "نقدي", "فودافون كاش", "إنستاباي", "تحويل بنكي", "أخرى"
+- If cash: "اسم مستلم الكاش"
+- If non-cash: "الرقم المرجعي"
+- "ملاحظات"
+- "إرفاق صورة" (optional)
+
+Validation:
+- amount_original > 0.
+- If RMB: exchange_rate_to_egp required.
+- If cash: cash_receiver_name required.
+- Allow overpayment (no hard block if amount_egp > remaining); just compute new balance that may be negative and show clearly as "مدفوع زيادة".
+
+On save:
+- Insert into `shipment_payments`.
+- Recalculate total_paid_egp, balance_egp, last_payment_date.
+- Log in `audit_logs`.
+
+6.7. Global Payments Overview – "سداد الشحنات"
+
+Menu entry: "سداد الشحنات" with tooltip.
+
+Summary cards:
+- "إجمالي تكلفة الشحنات (جنيه مصري)"
+- "إجمالي المدفوع (جنيه مصري)"
+- "إجمالي المتبقي (جنيه مصري)" (sum of positive balances)
+- "إجمالي المدفوع زيادة (جنيه مصري)" (sum of negative balances as positive)
+- "أحدث عملية سداد" – date, shipment, amount.
+
+Shipments payment table:
+- "رقم الشحنة"
+- "اسم الشحنة"
+- "حالة الشحنة"
+- "إجمالي تكلفة الشحنة (جنيه مصري)"
+- "إجمالي المدفوع (جنيه مصري)"
+- "المتبقي / المدفوع زيادة"
+- "تاريخ آخر سداد"
+
+Filters:
+- By shipment status
+- By payment status (paid, has balance, overpaid)
+- By supplier
+- By purchase date
+- By last payment date
+- By shipment code/name
+
+Row actions:
+- View shipment details at "سداد تكلفة الشحنة" tab.
+- Optional quick "إضافة دفعة" button to add payment for selected shipment.
+
+Payments ledger (كشف حركة السداد):
+- List all payments from `shipment_payments`:
+  - تاريخ الدفع
+  - رقم الشحنة
+  - اسم الشحنة
+  - المبلغ الأصلي + العملة
+  - قيمة المبلغ بالجنيه المصري
+  - طريقة الدفع
+  - اسم مستلم الكاش (إن وجد)
+  - الرقم المرجعي
+  - ملاحظات
+- Filters by date range, shipment, method, and user.
+- Totals at bottom: sum of amount_egp in the current filter.
+
+==================================================
+7. NON-FUNCTIONAL REQUIREMENTS
+==================================================
+
+- All validation and error messages in Arabic.
+- Use pagination for lists.
+- Ensure secure password hashing and authentication.
+- Enforce authorization per role.
+- Do not recalculate historical totals with new exchange rates; always rely on stored rates associated with operations.
+- Ensure calculations are done on the backend for integrity.
+
+==================================================
+GOAL
+==================================================
+
+Implement a production-ready web application that:
+
+- Manages shipments from purchase to "مستلمة بنجاح".
+- Calculates cost per shipment in RMB & EGP, clearly broken down (شراء، عمولة، شحن، جمارك، تخريج).
+- Tracks every payment towards each shipment, in RMB or EGP, with full conversion details and support for overpayments.
+- Provides per-shipment payment history with before/after balances.
+- Provides global overview for what has been paid, what is remaining, and what is overpaid across all shipments.
+- Offers a clean, Arabic RTL UI with intuitive tooltips on all main menu items.

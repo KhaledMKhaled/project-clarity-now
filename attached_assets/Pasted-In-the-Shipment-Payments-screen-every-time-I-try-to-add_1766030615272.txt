@@ -1,0 +1,102 @@
+In the “Shipment Payments” screen, every time I try to add a payment to a shipment, the system blocks me with this error message:
+
+“لا يمكنك تسجيل دفعة قبل حساب إجمالي تكلفة الشحنة — راجع بيانات التكلفة للشحنة”
+(English meaning: “You cannot record a payment before the shipment’s total cost is calculated. Please review the shipment cost data.”)
+
+However, the shipment is already fully entered and saved successfully:
+- All shipment data has been added and saved with no issues
+- Shipment status is “مستلمة بنجاح” (Received Successfully)
+- All balances/amounts appear registered and correct
+
+REQUEST:
+1) Diagnose why the system thinks the shipment total cost is not calculated (even though the shipment is received and data is saved).
+2) Fix the root cause so payments can be recorded normally for such shipments (EGP and RMB), without breaking integrity rules.
+3) Verify the linkage between “Add Shipment” → “Update Shipment” → “Mark as Received” → “Add Payment” is correct end-to-end.
+4) Confirm balances and totals are correct and consistent across:
+   - Shipment details
+   - Payments list/history
+   - Dashboard stats
+   - Accounting reports (supplier balances/statements if applicable)
+   - Audit logs
+
+DO NOT implement a workaround that simply bypasses validation. The fix must ensure totals are truly computed and stored correctly.
+
+============================================================
+NON-NEGOTIABLE RULES (MUST PRESERVE)
+============================================================
+
+- Authentication: Passport local login, Postgres session store, root bootstrap; secure cookies in production.
+- Authorization: isAuthenticated protects routes; requireRole enforces roles (Manager/Accountant); isAdmin Manager-only.
+- Payments:
+  - Validate payload (including paymentDate parsing)
+  - Prevent overpayment
+  - Update shipment totals atomically: totalPaid, balance, lastPaymentDate
+  - Use exchange rates for currency normalization when required
+  - Record creator and write audit logs for key mutations
+- Shipments:
+  - When status becomes “Received Successfully”, landed costs must be allocated (customs, takhreeg, shipping, commission) and inventory movements recorded.
+- Do not weaken validation, RBAC, or auditability.
+
+============================================================
+WHAT YOU MUST DO
+============================================================
+
+STEP 1 — Confirm Understanding (Before Coding)
+Write a short “Understanding Summary” confirming:
+- The exact error shown
+- The shipment state (received successfully, data saved, balances correct)
+- The expected behavior (allow payment creation)
+List 5–10 hypotheses for why this validation triggers, for example:
+- finalTotal / totalCost is NULL or 0 in DB despite UI showing values
+- final totals are computed only in memory/UI and not persisted
+- status “received” didn’t trigger the costing/allocation routine
+- missing shipping details or exchange rate references required for finalTotal
+- mismatched field names (e.g., finalTotal vs totalCost) in payment validation
+- rounding/precision causing “not computed” check to fail
+- stale frontend state (UI shows received but backend sees old status)
+- race condition / transaction not committed
+- migration/schema mismatch between environments
+
+STEP 2 — Reproduce and Trace the Validation
+- Reproduce in UI and capture:
+  - Payment request payload
+  - API response status/body
+  - Backend logs/stack trace
+- Locate the exact backend check that throws this message and identify which field(s) it depends on.
+- Inspect the shipment record in DB to see what the system uses as “total cost computed”.
+
+STEP 3 — Fix the Root Cause Properly
+Implement a correct fix that ensures:
+- Shipment total cost/final totals are computed and persisted when they should be (especially on “received successfully”)
+- The payment endpoint checks the correct field(s) and logic
+- If required cost inputs are missing, return a precise actionable error telling which component is missing (goods/shipping/commission/customs/takhreeg/rates)
+- After fix, a received shipment with complete data can accept payments immediately
+
+STEP 4 — Validate End-to-End Linking
+Verify and (if needed) fix the integration chain:
+- createShipmentWithItems initializes totals/balances correctly
+- updateShipmentWithItems recalculates totals when rates/items change
+- shipping detail upsert updates cost fields + rate sources/dates
+- marking shipment received triggers landed-cost allocation + inventory movements
+- adding payment updates totals atomically and reflects across dashboards/accounting
+- audit logs are written appropriately
+
+STEP 5 — Add Regression Tests
+Add automated tests covering:
+- Received shipment with computed totals can accept payment
+- Shipment missing required cost inputs is blocked with specific error
+- Totals persisted and payment updates balances atomically
+- Overpayment blocked
+- RMB payments require correct rate handling
+
+============================================================
+DELIVERABLES
+============================================================
+
+1) Root cause explanation: why the system thinks total cost isn’t computed.
+2) Code changes: list files changed and key diff snippets.
+3) Improved error messaging (Arabic user-facing message can remain, but make it specific and consistent).
+4) How to test: manual steps + automated test instructions.
+5) Confirmation checklist showing balances/totals are correct across all related screens and reports.
+
+Start now by writing the Understanding Summary and investigation plan, then proceed to implement the fix.

@@ -1,0 +1,118 @@
+A new error message is still appearing:
+“لم يتم إدخال بيانات التكلفة بعد”
+(English meaning: “Cost data has not been entered yet.”)
+
+This error appears even after I create a NEW shipment and simply press “Save”.
+I need you to ensure that:
+1) When adding a new shipment and saving it (even if shipping/customs/takhreeg are not yet completed), the shipment’s cost data is treated correctly and consistently.
+2) The shipment cost (or “currently known cost”) appears correctly across the entire platform wherever it is shown (shipment details, lists, dashboards, accounting views, payments screen).
+3) The previous payment-blocking issues are solved **radically and permanently**, not with temporary bypasses.
+
+============================================================
+CRITICAL BUSINESS RULES (MUST IMPLEMENT)
+============================================================
+
+1) Partial data is normal:
+- A shipment can be saved with only partial cost information (e.g., goods cost only).
+- Shipping, commission, customs, and takhreeg may be unknown initially.
+
+2) Payments are allowed after creation:
+- A user must be able to pay immediately after saving a new shipment.
+- The ONLY restriction: cannot pay more than what is allowed based on currently known costs (no overpayment).
+
+3) Cost consistency across the platform:
+- Everywhere the platform shows “shipment cost”, it must use the SAME definition:
+  - “Known/Current Total Cost” = sum of available cost components (null-safe; treat missing optional fields as 0)
+  - “Final Total Cost” is only required for final accounting, not for early-stage payments.
+
+============================================================
+NON-NEGOTIABLE RULES (MUST PRESERVE)
+============================================================
+
+- Authentication: Passport local login, Postgres session store; secure cookies in production.
+- Authorization: isAuthenticated protects routes; requireRole enforces roles.
+- Payments integrity:
+  - Validate payload + paymentDate parsing
+  - Prevent overpayment correctly
+  - Update shipment totals atomically: totalPaid, balance, lastPaymentDate
+  - Handle currencies correctly (EGP/RMB; exchange rate logic where required)
+  - Record creator and audit-log key mutations
+- Do NOT weaken RBAC, audit logging, or data validation.
+
+============================================================
+WHAT YOU MUST DO
+============================================================
+
+STEP 1 — Understanding Summary (Before Coding)
+Write a short summary confirming:
+- The new error (“Cost data has not been entered yet”) still appears
+- It happens after creating and saving a new shipment
+- The desired behavior: saving new shipment should compute/display known cost everywhere and allow payments immediately
+List 6–12 hypotheses for why this happens, such as:
+- Known cost is not persisted on create (computed only in UI)
+- Null values interpreted as “missing” instead of “0”
+- Different screens use different fields (finalTotal vs totalCost vs computedTotal)
+- Payment validation checks the wrong field
+- Shipment save endpoint does not initialize totals/balance correctly
+- A required exchange rate is not stored/passed on create
+- Backend “cost completeness” check triggers incorrectly for early-stage shipments
+
+STEP 2 — Locate the exact source of the error
+- Find where “لم يتم إدخال بيانات التكلفة بعد” is thrown (frontend vs backend).
+- Identify which data condition triggers it (which field is null/0/undefined).
+- Determine the correct rule:
+  - Is this error supposed to block ANY action?
+  - If it should exist at all, restrict it to actions that truly require finalized cost only (not payment creation).
+
+STEP 3 — Implement a unified cost model (single source of truth)
+Create/ensure a single, consistent computation for:
+- knownTotalCost (null-safe sum of currently available components)
+- finalTotalCost (if applicable after shipping/customs/takhreeg completion)
+Then ensure ALL screens and APIs use the correct one:
+- Shipment lists/details show knownTotalCost (and optionally finalTotalCost if present)
+- Payments screen uses knownTotalCost to compute remainingAllowed
+- Dashboards/accounting either:
+  - use knownTotalCost for “current” views
+  - and finalTotalCost for “finalized” views
+Make sure naming is consistent and not ambiguous.
+
+STEP 4 — Fix creation/save behavior
+On “create shipment and save”:
+- Ensure the backend initializes the cost fields properly:
+  - goods cost derived from items + RMB→EGP rate (if part of system)
+  - optional components default to 0 (not null) when appropriate
+- Ensure balances are initialized consistently (totalPaid=0, balance=knownTotalCost initially if that’s the invariant)
+
+STEP 5 — Fix payments logic permanently
+- Remove any validation that blocks payments due to “cost data not entered” unless the system truly cannot compute any known cost and your business rules disallow deposits.
+- Overpayment check must use:
+  remainingAllowed = max(0, knownTotalCost - totalPaid)
+- Provide clear error message when user exceeds remainingAllowed, including the numbers.
+
+STEP 6 — Regression Verification (Platform-wide)
+After changes, verify:
+- New shipment: save → known cost appears everywhere without errors
+- Add payment immediately after save works
+- Received shipment: costs allocated and inventory movements created; payments still work
+- Dashboards/accounting reflect consistent totals
+- Audit logs are correct
+
+STEP 7 — Automated Tests (Required)
+Add tests for:
+- create shipment initializes known costs and balances
+- payment allowed immediately after create
+- error “cost data not entered” does not block allowed flows
+- overpayment blocked correctly
+- cross-screen consistency (API endpoints return consistent cost fields)
+
+============================================================
+DELIVERABLES
+============================================================
+
+1) Root cause explanation: why the new “cost data not entered” error appears.
+2) Permanent fix: unified cost model + corrected validation rules.
+3) File list and key diffs (what changed and why).
+4) Manual test steps to verify across the platform.
+5) Automated tests added/updated.
+
+Start now with the Understanding Summary, then proceed to implement the fix.

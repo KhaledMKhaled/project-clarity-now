@@ -1,0 +1,131 @@
+The payment bug is STILL happening.
+
+I want you to perform a FULL, HARD reset-style verification:
+1) Add realistic dummy/fake data (seed data) in the database for a complete end-to-end scenario.
+2) Run a complete payment workflow test suite (manual + automated).
+3) Fix ALL problems that prevent payments from being saved and reflected correctly across the platform.
+4) Confirm that payment works normally, is persisted in DB, can be viewed later, and affects balances/totals correctly.
+5) Add all necessary tests to guarantee this will NOT happen again.
+6) Do NOT stop until you can demonstrate strong evidence (tests + logs + verification steps) that payments work for:
+   - Every user role that is allowed (e.g., Manager, Accountant)
+   - Every shipment status/state (New / Awaiting Shipping / Ready for Pickup / Received Successfully)
+   - Both currencies (EGP and RMB)
+   - Edge cases (overpayment, missing optional costs, missing rates if required)
+
+============================================================
+NON-NEGOTIABLE SYSTEM RULES (MUST PRESERVE)
+============================================================
+
+- Auth: Passport local login, Postgres session store; secure cookies in production.
+- RBAC: isAuthenticated + requireRole; isAdmin for Manager-only features.
+- Payments integrity:
+  - Validate payload (including paymentDate parsing)
+  - Prevent overpayment
+  - Update shipment totals atomically: totalPaid, balance, lastPaymentDate
+  - Correct currency handling (EGP/RMB) using exchange rates where required
+  - Record creator user
+  - Audit-log key mutations
+- Do not weaken validation, RBAC, or auditability.
+
+============================================================
+BUSINESS RULES (MUST IMPLEMENT)
+============================================================
+
+1) Payments are allowed immediately after saving a new shipment.
+2) Shipments may have partial cost data initially:
+   - Shipping/customs/takhreeg/commission can be empty/0 until later.
+3) The ONLY restriction is no overpayment based on currently known costs.
+4) The “allowed/remaining amount” must be correct and never show 0 unless:
+   - knownTotalCost is truly 0, or
+   - totalPaid >= knownTotalCost
+
+Define a single source of truth:
+- knownTotalCost = sum of available cost components (null-safe; missing optional fields treated as 0)
+- remainingAllowed = max(0, knownTotalCost - totalPaid)
+
+============================================================
+EXECUTION PLAN (MUST FOLLOW)
+============================================================
+
+PHASE 1 — Build Test Data (Dummy Data / Seed)
+Create seed data that covers:
+- Users:
+  - root/admin (Manager)
+  - manager user
+  - accountant user
+  - a user with no permission (for negative tests)
+- Suppliers:
+  - at least 2 suppliers
+- Exchange Rates:
+  - RMB→EGP (today + another historical date)
+  - USD→RMB (today + another historical date)
+- Shipments:
+  Create at least 4 shipments, one for each status:
+  1) New (just created, only goods/items cost known)
+  2) Awaiting Shipping
+  3) Ready for Pickup (shipping details present)
+  4) Received Successfully (inventory movements allocated)
+- For shipments, include:
+  - items with RMB costs
+  - optional costs initially missing for early shipments (customs/takhreeg/shipping/commission = null/0)
+  - full cost components for the received shipment
+
+PHASE 2 — End-to-End Payment Validation (Manual + Programmatic)
+For EACH shipment status (4 shipments) and EACH allowed role (Manager + Accountant):
+- Create an EGP payment (valid)
+- Create an RMB payment (valid, with rate handling)
+- Confirm it is persisted (DB row exists)
+- Confirm shipment totals update correctly (totalPaid, balance, lastPaymentDate)
+- Confirm payments list/history shows it
+- Confirm dashboards/accounting reflect it
+
+Negative cases (must test):
+- Overpayment attempt: blocked with clear message, no DB changes
+- Invalid date: blocked with clear message
+- Missing shipment: 404 with clear message
+- Forbidden user role: 403 with clear message
+- If RMB requires a rate and it’s missing: blocked with clear message
+
+PHASE 3 — Fix All Root Causes Found
+As you run tests, fix issues properly (not workarounds), including:
+- Payload schema mismatches
+- Currency normalization bugs
+- Null/NaN cost computations causing remainingAllowed=0
+- Wrong “cost data missing” checks that block payments
+- Transaction boundaries not truly atomic
+- RBAC/session issues preventing API calls
+- Stale UI state after saving shipments or payments
+
+PHASE 4 — Automated Test Suite (Required)
+Add/extend automated tests to ensure the bug cannot return:
+- API tests for payment creation (EGP + RMB) across shipment statuses
+- Overpayment tests
+- Null optional cost tests (must still allow payment if knownTotalCost > 0)
+- RBAC tests (403 for unauthorized roles)
+- Transaction atomicity tests (all-or-nothing behavior)
+
+PHASE 5 — Evidence-Based Final Report (Must Provide)
+At the end, output:
+1) A short list of root causes discovered and how each was fixed
+2) The exact seed data strategy (how to create it, where it lives)
+3) The full list of test cases executed (matrix by role × status × currency)
+4) Test results (pass/fail) and how to run tests locally in Replit
+5) Confirmation that payments:
+   - save successfully
+   - are visible later
+   - update balances/totals correctly
+   - work for all shipment statuses
+   - do not regress
+
+============================================================
+IMPORTANT CONSTRAINTS
+============================================================
+
+- Do not “disable validation” or “skip checks” just to make it pass.
+- If a rule conflicts with the business requirements, adjust the rule to match business requirements and update error messages accordingly.
+- Improve error messages to be human-readable and actionable. Avoid generic “Something went wrong.”
+
+BEGIN NOW:
+1) Write an “Understanding Summary” confirming what you will do.
+2) Identify where in the codebase payments are created and validated.
+3) Implement seed data, run tests, fix issues, and add regression tests until everything is stable.

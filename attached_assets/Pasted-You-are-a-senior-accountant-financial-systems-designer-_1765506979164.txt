@@ -1,0 +1,559 @@
+You are a senior accountant, financial systems designer, and full-stack engineer.
+
+Your task:
+Design and implement a COMPLETE but SIMPLE accounting & reporting layer **on top of the existing shipments and payments system**, without adding any extra manual journal entries.
+
+Goal:
+- Provide clear financial information and reports that are easy to understand even for non-accountants.
+- Rely ONLY on data that is already captured in the system:
+  - Shipments’ cost breakdown (in RMB and EGP).
+  - Payments for each shipment (in EGP and/or RMB, with cost_component type and payment method).
+- Show clearly:
+  - Total costs (by type).
+  - How much has been paid.
+  - How much is still owed (“فلوس عليك”).
+  - If there is any credit (“فلوس ليك”) per supplier.
+  - Detailed movement reports with powerful filters.
+  - A unified “current status” view that shows costs, payments, and remaining amounts per shipment in ONE screen.
+
+All UI must be in Arabic (RTL), but this specification is in English.
+
+==================================================
+0. DATA SOURCES & ASSUMPTIONS
+==================================================
+
+You MUST build all accounting views and reports based ONLY on the following existing data (do NOT add new manual accounting entries):
+
+From shipments (per shipment):
+- Total purchase cost in RMB:
+  - `purchase_cost_rmb`
+- Total shipping cost in RMB:
+  - `shipping_cost_rmb`
+- Total commission in RMB:
+  - `commission_cost_rmb`
+- Total customs cost in EGP:
+  - `customs_cost_egp`
+- Total takhreeg (clearance) cost in EGP:
+  - `takhreeg_cost_egp`
+- Final total cost in EGP:
+  - `final_total_cost_egp`  // purchase + commission + shipping + customs + takhreeg
+- Supplier reference (supplier_id)
+- Shipment code / number
+- Shipment status (including archived "مؤرشفة")
+- Purchase date
+
+From payments (per payment):
+- shipment_id
+- payment_date
+- payment_currency (RMB or EGP)
+- amount_original
+- amount_egp (all balances are based on EGP)
+- cost_component (enum):
+  - "تكلفة البضاعة"
+  - "الشحن"
+  - "الجمرك والتخريج"
+- payment_method:
+  - "نقدي"
+  - "فودافون كاش"
+  - "إنستاباي"
+  - "تحويل بنكي"
+  - "أخرى"
+- cash_receiver_name (if cash)
+- reference_number (if non-cash)
+- note
+- created_by_user_id
+
+Do NOT change any existing business rules (such as forbidding overpayments). Build accounting logic on top of these facts.
+
+==================================================
+1. ACCOUNTING DASHBOARD – HIGH-LEVEL SUMMARY
+==================================================
+
+Create a main "Accounting / المحاسبة" dashboard with simple Arabic labels that shows:
+
+1) Cost totals (for a selected date range, default = all time):
+
+   Cards with Arabic text:
+
+   - "إجمالي قيمة الفواتير بالرممبي":
+     - Sum of `purchase_cost_rmb` for all shipments in the filter.
+     - Also show what this represents in EGP using the stored purchase exchange rate per shipment, if available.
+
+   - "إجمالي تكلفة الشحن بالرممبي":
+     - Sum of `shipping_cost_rmb` for all shipments in the filter.
+     - Also show EGP equivalent using stored shipping exchange rates.
+
+   - "إجمالي قيمة العمولة بالرممبي":
+     - Sum of `commission_cost_rmb` for all shipments in the filter.
+     - EGP equivalent as well.
+
+   - "إجمالي قيمة الجمرك بالجنيه":
+     - Sum of `customs_cost_egp`.
+
+   - "إجمالي قيمة التخريج بالجنيه":
+     - Sum of `takhreeg_cost_egp`.
+
+   - "إجمالي تكلفة الشحنات (جنيه مصري)":
+     - Sum of `final_total_cost_egp` across all filtered shipments.
+
+2) Payments & balances (for non-archived and/or archived shipments, with a toggle):
+
+   - "إجمالي المدفوع (جنيه مصري)":
+     - Sum of `amount_egp` for all payments in the selected period.
+
+   - "إجمالي المتبقي (جنيه مصري)":
+     - Sum over all shipments:
+       - `balance_egp = final_total_cost_egp - total_paid_egp`
+       - Include only shipments with balance_egp > 0 (open payables).
+
+   - Optional card:
+     - "عدد الشحنات غير المسددة بالكامل":
+       - Count of shipments with `balance_egp > 0`.
+
+3) Make the dashboard filterable by:
+   - Date range (based on purchase date OR payment date, selectable).
+   - Supplier.
+   - Shipment status (including "مؤرشفة" if desired).
+   - Currency (for RMB vs overall).
+
+Use simple Arabic wording and tooltips to explain each card.
+
+==================================================
+2. SUPPLIER BALANCES – “الفلوس اللي عليك وليك” لكل مورد
+==================================================
+
+Build a screen called "كشف حساب موردين" (Suppliers Account Statement).
+
+For each supplier:
+
+1) Compute for the selected date range:
+
+   - `total_purchases_egp`:
+     - Sum of `final_total_cost_egp` of all shipments for this supplier in the period (or all time if no date filter).
+
+   - `total_payments_egp`:
+     - Sum of `amount_egp` of all payments linked to shipments for this supplier in the period.
+
+   - `supplier_balance_egp = total_purchases_egp - total_payments_egp`.
+
+2) Interpret the balance in simple Arabic:
+
+   - If `supplier_balance_egp > 0`:
+     - Show: "فلوس عليك: {supplier_balance_egp} جنيه"
+       (you still owe this supplier).
+
+   - If `supplier_balance_egp = 0`:
+     - Show: "لا يوجد رصيد بينكم" (fully settled with this supplier).
+
+   - If `supplier_balance_egp < 0` (in case of legacy overpayments or corrections):
+     - Show: "فلوس ليك عند المورد: {abs(balance)} جنيه"
+       (you have a credit with this supplier).
+
+3) UI:
+
+   - A table with columns:
+     - "اسم المورد"
+     - "إجمالي تكلفة الشحنات (جنيه)"
+     - "إجمالي المدفوع (جنيه)"
+     - "الرصيد الحالي" (مع نص فلوس عليك / ليك)
+   - Filters:
+     - By supplier name.
+     - By date range.
+     - By “فلوس عليك فقط” أو “فلوس ليك فقط”.
+
+   - Clicking on a supplier row opens a detailed supplier statement:
+     - Shows the sequence of shipments and payments for that supplier (like a mini ledger).
+
+==================================================
+3. SHIPMENT-LEVEL ACCOUNTING SUMMARY
+==================================================
+
+For each shipment, enhance the existing summary with a clear "Accounting" tab:
+
+1) Show:
+
+   - "إجمالي تكلفة الشحنة (جنيه مصري)" – final_total_cost_egp.
+   - Breakdown:
+     - "تكلفة البضاعة (RMB / جنيه)"
+     - "تكلفة الشحن (RMB / جنيه)"
+     - "قيمة العمولة (RMB / جنيه)"
+     - "إجمالي الجمرك (جنيه)"
+     - "إجمالي التخريج (جنيه)"
+
+   - "إجمالي المدفوع (جنيه مصري)" – sum of payments.amount_egp.
+   - "المتبقي (جنيه مصري)" – max(0, final_total_cost_egp - total_paid_egp).
+
+2) Clarify state:
+
+   - If balance_egp > 0 → show:
+     - "متبقي عليك: {balance_egp} جنيه"
+   - If balance_egp = 0 → show:
+     - "الشحنة مسددة بالكامل"
+
+3) Below the summary, show the payment list (already exists) with the accounting field:
+
+   - Columns:
+     - "تاريخ الدفع"
+     - "المبلغ الأصلي" + العملة
+     - "المبلغ بالجنيه المصري"
+     - "تحت حساب" (تكلفة البضاعة / الشحن / الجمرك والتخريج)
+     - "طريقة الدفع"
+     - "اسم مستلم الكاش" (إن وجد)
+     - "المرجع"
+     - "ملاحظات"
+
+4) Make this tab read-only from an accounting perspective (no manual journals). Edits happen via the existing payment entry UI.
+
+==================================================
+4. GLOBAL MOVEMENT REPORT – “كشف حركة المحاسبة”
+==================================================
+
+Build a comprehensive movement report named "كشف حركة الحساب" that treats each important financial event as a line.
+
+Each row should represent a **movement** of money or cost, standardized as:
+
+- Movement types (نوع الحركة):
+  - "تكلفة بضاعة"    (from shipments)
+  - "تكلفة شحن"      (from shipments)
+  - "عمولة"          (from shipments)
+  - "جمرك"           (from shipments)
+  - "تخريج"          (from shipments)
+  - "دفعة"           (from shipment_payments)
+
+Each row must include:
+
+- التاريخ (date):
+  - For cost rows: use purchase date or relevant shipment step date.
+  - For payments: payment_date.
+
+- رقم الشحنة (shipment code/number)
+
+- اسم المورد
+
+- نوع الحركة:
+  - "تكلفة بضاعة" / "تكلفة شحن" / "عمولة" / "جمرك" / "تخريج" / "دفعة"
+
+- نوع الدفعة "تحت حساب" (for payments only):
+  - "تكلفة البضاعة" / "الشحن" / "الجمرك والتخريج"
+
+- طريقة الدفع (for payments only):
+  - "نقدي" / "فودافون كاش" / "إنستاباي" / "تحويل بنكي" / "أخرى"
+
+- العملة الأصلية:
+  - RMB or EGP, if relevant.
+
+- المبلغ بالعملة الأصلية (optional display).
+
+- "المبلغ بالجنيه المصري":
+  - For cost rows: the cost in EGP (using stored exchange rates for RMB-based costs).
+  - For payments: amount_egp.
+
+- اتجاه الحركة (simple label, no debit/credit jargon):
+  - For costs: "تكلفة"
+  - For payments: "مدفوع"
+
+- اسم المستخدم الذي سجل الحركة (created_by_user_id → user name).
+
+### Filters
+
+Add powerful but simple filters:
+
+- Date range (من / إلى).
+- Shipment number.
+- Supplier.
+- Movement type:
+  - تكلفة بضاعة / تكلفة شحن / عمولة / جمرك / تخريج / دفعة.
+- Payment “تحت حساب”:
+  - تكلفة البضاعة / الشحن / الجمرك والتخريج.
+- Payment method:
+  - نقدي / فودافون كاش / إنستاباي / تحويل بنكي / أخرى.
+- Shipment status (including "مؤرشفة").
+- Currency (RMB-only rows or all).
+
+The report should:
+
+- Display totals at the bottom for the filtered result:
+  - "إجمالي التكلفة (جنيه)" – sum of all cost-type rows in EGP.
+  - "إجمالي المدفوع (جنيه)" – sum of all payment rows in EGP.
+  - "صافي الحركة" (difference between cost and paid in the filtered range).
+
+Allow export to Excel/CSV for offline analysis.
+
+==================================================
+5. CASH FLOW BY PAYMENT METHOD
+==================================================
+
+Create a simple report: "تقرير حركة المدفوعات حسب وسيلة الدفع".
+
+1) For a selected date range:
+
+   - Group payments by payment_method:
+     - نقدي
+     - فودافون كاش
+     - إنستاباي
+     - تحويل بنكي
+     - أخرى
+
+2) For each method, show:
+
+   - "إجمالي عدد الدفعات"
+   - "إجمالي المبلغ المدفوع (جنيه مصري)"
+
+3) Optional:
+   - A simple bar chart (method vs total EGP) with Arabic labels.
+
+This helps understand how money is leaving by channel (cash vs electronic).
+
+==================================================
+6. REPORT FILTERING & UX PRINCIPLES
+==================================================
+
+Across all accounting screens, respect these rules:
+
+1) All UI text in Arabic, RTL.
+   - Avoid heavy accounting jargon.
+   - Prefer simple wording:
+     - "تكلفة" instead of "مدين".
+     - "مدفوع" instead of "دائن".
+     - "فلوس عليك" / "فلوس ليك" instead of "رصيد مدين/دائن".
+
+2) Every report must:
+   - Have clear filters.
+   - Show a “summary area” with totals for the filtered results.
+   - Allow export (CSV/Excel).
+
+3) Accounting screens should be **read-only** in terms of business data:
+   - To change numbers, users must go to:
+     - Shipments (to change costs).
+     - Payments (to add/edit payments).
+   - The accounting module just **reads and explains**.
+
+==================================================
+7. VALIDATION & TESTING
+==================================================
+
+After implementing the accounting layer:
+
+1) Use demo data to simulate:
+   - Several suppliers.
+   - Multiple shipments per supplier.
+   - Different costs in RMB and EGP.
+   - Multiple payments per shipment with different:
+     - cost_component ("تحت حساب")
+     - payment methods
+     - dates
+
+2) Check:
+
+   - Dashboard totals match the sum of detailed reports.
+   - Supplier balances match:
+     - Total shipments cost (EGP) – total payments (EGP).
+   - Shipment-level accounting tab matches:
+     - The same numbers used in the global reports.
+   - Movement report:
+     - Every cost/payment appears once, with the correct type, supplier, shipment, and amounts.
+   - Filters behave correctly and update totals.
+
+3) Output a short summary explaining:
+   - The main accounting screens implemented.
+   - How a non-accountant can use:
+     - The dashboard.
+     - Supplier balances screen.
+     - Shipment accounting tab.
+     - Movement report.
+     - Payment-method report.
+
+The end result should be:
+- A clear, simple accounting layer that turns existing shipment and payment data into understandable financial information:
+  - إجمالي قيمة الفواتير بالرممبي والشحن والعمولة.
+  - إجمالي الجمرك والتخريج بالجنيه.
+  - الفلوس اللي عليك للموردين، واللي ليك عندهم لو فيه.
+  - كشف حركة تفصيلي يمكن تصفيته بأي طريقة (تاريخ، نوع حركة، نوع دفعة، وسيلة دفع، مورد، شحنة…).
+- All without requiring the user to understand professional accounting terminology.
+
+==================================================
+8. UNIFIED CURRENT STATUS VIEW – شاشة الوضع الحالي للشحنات
+==================================================
+
+Create a unified, “one-stop” screen that allows the user to see the **current situation for all shipments** (cost + payments + remaining) in one place, without having to jump between multiple screens.
+
+Name (in Arabic):  
+- "الوضع الحالي للشحنات"
+
+This screen should combine:
+- Shipment-level cost summary.
+- Shipment-level payment summary.
+- Payment status filter (fully unpaid / partially paid / fully paid).
+- Quick access to detailed payments and cost breakdown for each shipment.
+
+---------------------------------------------
+8.1. Payment Status Filter (فلتر حالة السداد)
+---------------------------------------------
+
+Add a filter that lets the user choose **which shipments to see** based on their PAYMENT STATUS.
+
+Define for each shipment:
+
+- `total_cost_egp` = `final_total_cost_egp`
+- `total_paid_egp` = sum of payments.amount_egp for that shipment.
+- `balance_egp = total_cost_egp - total_paid_egp`
+
+Then define three payment states:
+
+1) "شحنات لم يتم دفع أي مبلغ لها":
+   - Condition:
+     - `total_paid_egp = 0`
+   - These are shipments where no payments have been recorded.
+
+2) "شحنات مدفوعة جزئياً":
+   - Condition:
+     - `total_paid_egp > 0` AND `balance_egp > 0`
+   - There are some payments, but there is still remaining balance.
+
+3) "شحنات مسددة بالكامل":
+   - Condition:
+     - `balance_egp = 0`
+   - The shipment is fully settled.
+
+In the UI, add a filter called (in Arabic):
+
+- "حالة السداد" with options:
+  - "الكل"
+  - "لم يتم دفع أي مبلغ"
+  - "مدفوعة جزئياً"
+  - "مسددة بالكامل"
+
+The user can combine this with other filters (date, supplier, etc.).
+
+---------------------------------------------
+8.2. Main Table – Overview of Shipments
+---------------------------------------------
+
+In the "الوضع الحالي للشحنات" screen, show a main table with one row per shipment that matches the filters.
+
+Columns (Arabic labels):
+
+- "رقم الشحنة"
+- "اسم الشحنة"
+- "اسم المورد"
+- "تاريخ الشراء"
+- "حالة الشحنة" (workflow status: جديدة / جاهزة للاستلام / مستلمة بنجاح / مؤرشفة)
+- "حالة السداد" (derived as:
+   - "لم يتم دفع أي مبلغ"
+   - "مدفوعة جزئياً"
+   - "مسددة بالكامل")
+- "إجمالي تكلفة الشحنة (جنيه مصري)" = final_total_cost_egp
+- "إجمالي المدفوع (جنيه مصري)" = total_paid_egp
+- "المتبقي (جنيه مصري)" = balance_egp
+- "عدد الدفعات" = count of payments for this shipment
+- "تاريخ آخر دفعة" (if any)
+
+Requirements:
+
+- Allow the user to **show/hide columns**:
+  - e.g., via a “column chooser” menu so they can add or remove information from view.
+- Sorting:
+  - Allow sorting by:
+    - purchase date
+    - supplier
+    - payment status
+    - remaining amount
+- The table must be responsive and scrollable horizontally if many columns are shown.
+
+---------------------------------------------
+8.3. Inline Details – Cost & Payment Breakdown
+---------------------------------------------
+
+The user should NOT need to open separate pages to see details.
+
+When the user clicks a shipment row (or a "تفاصيل" button on that row):
+
+1) Show a detail panel in the **same screen** (e.g., a collapsible section under the row, or a side panel) containing:
+
+   A) Cost breakdown for this shipment:
+   - "تكلفة البضاعة (RMB / جنيه)"
+   - "تكلفة الشحن (RMB / جنيه)"
+   - "قيمة العمولة (RMB / جنيه)"
+   - "إجمالي الجمرك (جنيه)"
+   - "إجمالي التخريج (جنيه)"
+   - "إجمالي تكلفة الشحنة (جنيه مصري)"
+
+   B) Payment history for this shipment:
+   - A table listing all payments with columns:
+     - "تاريخ الدفع"
+     - "المبلغ الأصلي" + العملة
+     - "المبلغ بالجنيه المصري"
+     - "تحت حساب" (تكلفة البضاعة / الشحن / الجمرك والتخريج)
+     - "طريقة الدفع" (نقدي / فودافون كاش / إنستاباي / تحويل بنكي / أخرى)
+     - "اسم مستلم الكاش" (إن وجد)
+     - "المرجع"
+     - "ملاحظات"
+   - At the bottom of this payment table:
+     - "إجمالي المدفوع (جنيه)"
+     - "المتبقي (جنيه)"
+
+2) Allow adding a new payment from within this panel:
+   - When a new payment is added and saved:
+     - Immediately update:
+       - total_paid_egp
+       - balance_egp
+       - payment status (لم يتم الدفع / مدفوعة جزئياً / مسددة بالكامل)
+     - Refresh both:
+       - The main table row.
+       - The details panel.
+
+This way, the user has **one screen** where they can see:
+- All shipments (filtered).
+- Current status.
+- Breakdown of each shipment’s costs.
+- All payments for that shipment.
+
+---------------------------------------------
+8.4. Filters on the Unified View
+---------------------------------------------
+
+On top of the "الوضع الحالي للشحنات" screen, add the following filters:
+
+- Date range:
+  - Based on:
+    - Purchase date (تاريخ الشراء), with labels: "من تاريخ" / "إلى تاريخ".
+- Supplier.
+- Shipment status:
+  - جديدة / جاهزة للاستلام / مستلمة بنجاح / مؤرشفة / الكل.
+- Payment status:
+  - "لم يتم دفع أي مبلغ"
+  - "مدفوعة جزئياً"
+  - "مسددة بالكامل"
+  - "الكل"
+- Shipment code/number (free text search).
+- Optional:
+  - Minimum / maximum remaining amount (e.g., show only shipments with remaining > X).
+
+All filters should apply in real time to:
+
+- The main table.
+- The totals area (if you add summary cards to this view, e.g., total remaining for filtered shipments).
+
+---------------------------------------------
+8.5. UX Goals for This Screen
+---------------------------------------------
+
+- This screen is meant to be the **daily control center** for the user.
+- A non-accountant should be able to answer in seconds:
+  - How many shipments have **no payments at all**?
+  - How many are **partially paid** and how much is left on them in total?
+  - Which shipments are **fully paid**?
+  - For a specific shipment:
+    - How was its cost built up (بضاعة / شحن / عمولة / جمرك / تخريج)?
+    - What payments have been made, when, how, and "تحت حساب إيه"؟
+
+- The user should NOT have to leave this screen to see details:
+  - Everything is visible either as columns in the main table
+  - Or in the inline details panel.
+
+Keep all wording in Arabic, keep layout RTL, avoid accounting jargon, and rely on simple labels like:
+- "تكلفة"
+- "مدفوع"
+- "متبقي"
+- "فلوس عليك"
+- "فلوس ليك"

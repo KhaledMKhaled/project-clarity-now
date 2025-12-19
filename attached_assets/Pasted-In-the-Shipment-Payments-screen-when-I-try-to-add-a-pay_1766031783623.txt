@@ -1,0 +1,117 @@
+In the “Shipment Payments” screen, when I try to add a payment, the system shows an error like:
+“The allowed amount is 0”
+(Arabic: “المبلغ المسموح هو 0”)
+
+But this is wrong because the shipment cost is clearly greater than 0.
+
+REQUEST:
+1) Investigate why the system computes the “allowed payable amount” as 0 even though the shipment has a positive cost.
+2) Fix the root cause so the allowed amount is calculated correctly.
+3) Ensure payments work correctly for both:
+   - New shipments (partial cost data is normal)
+   - Received shipments (final costs may be allocated)
+4) Ensure the fix is permanent and consistent across the entire platform (shipments, payments, dashboards, accounting, audit logs).
+
+============================================================
+BUSINESS RULE (MUST IMPLEMENT)
+============================================================
+
+Payments must be allowed even if some cost components are not entered yet.
+The ONLY restriction is no overpayment beyond the currently known cost.
+
+Define and use a consistent calculation everywhere:
+- knownTotalCost = sum of available cost components (null-safe; missing optional fields treated as 0)
+- remainingAllowed = max(0, knownTotalCost - totalPaidSoFar)
+
+The system must NEVER show remainingAllowed = 0 unless:
+- knownTotalCost is actually 0, or
+- totalPaidSoFar >= knownTotalCost
+
+If the system supports deposits/advance payments even when knownTotalCost=0, then implement that rule explicitly. Otherwise, require at least goods cost to exist to compute knownTotalCost, and return a clear actionable error telling what is missing.
+
+============================================================
+NON-NEGOTIABLE RULES (MUST PRESERVE)
+============================================================
+
+- Authentication: Passport local login, Postgres session store; secure cookies in production.
+- Authorization: isAuthenticated + requireRole (Manager/Accountant).
+- Payments integrity:
+  - Validate payload + paymentDate parsing
+  - Prevent overpayment correctly
+  - Update shipment totals atomically: totalPaid, balance, lastPaymentDate
+  - Correct currency handling (EGP/RMB) using exchange rates where required
+  - Record creator + audit log successful mutations
+- Do NOT bypass validation; fix the logic.
+
+============================================================
+WHAT YOU MUST DO
+============================================================
+
+STEP 1 — Understanding Summary (Before Coding)
+Write a short summary confirming:
+- The UI shows “allowed amount = 0”
+- Shipment cost is > 0
+- Expected: allowed amount should reflect (knownTotalCost - totalPaid)
+
+List 8–12 likely root causes, for example:
+- knownTotalCost is computed from the wrong fields (finalTotal vs totalCost vs derivedTotal)
+- cost fields are null and treated as “missing” or NaN, collapsing to 0
+- currency mismatch: costs stored in RMB but remaining computed in EGP (or vice versa)
+- shipment totals not persisted; UI shows computed value but backend has 0/null
+- totalPaid is incorrectly greater than knownTotalCost due to normalization or duplicate payments
+- rounding/precision bug causing negative remaining that is clamped to 0
+- incorrect join/query returns wrong shipment record
+- stale frontend state or caching after shipment updates
+- rate logic fails and returns 0 cost in EGP
+
+STEP 2 — Reproduce and Trace
+- Reproduce the issue with a specific shipment:
+  - Capture payment request payload and API response
+  - Log the values used to compute remainingAllowed:
+    - knownTotalCost
+    - totalPaid
+    - computed remainingAllowed
+    - currency + exchange rates used
+- Inspect the shipment record directly in DB to confirm what values exist vs what UI displays.
+
+STEP 3 — Fix the Remaining Calculation
+- Create a single backend function/helper to compute:
+  - knownTotalCost (null-safe sum of available components)
+  - remainingAllowed
+- Ensure the payment endpoint always uses this helper.
+- Ensure the frontend displays the server-calculated remainingAllowed and uses the same currency consistently.
+
+STEP 4 — Correct Currency Handling
+- Decide and enforce one invariant:
+  - Either knownTotalCost and totalPaid are both stored/compared in EGP, or
+  - They are computed per currency (RMB section and EGP section separately)
+- Fix any currency normalization mistakes (especially RMB payment conversions and rate usage).
+- If showing “allowed amount” to the user, show which currency it is in.
+
+STEP 5 — Platform-wide Consistency
+Verify that shipment totals and payments remain consistent across:
+- Shipment details and lists
+- Payments history
+- Dashboard stats
+- Accounting reports
+- Supplier statements/balances (if applicable)
+- Audit logs
+
+STEP 6 — Add Regression Tests (Required)
+Add tests for:
+- Shipment with cost > 0 yields remainingAllowed > 0 when totalPaid < knownTotalCost
+- Overpayment blocked correctly
+- RMB payment normalization does not corrupt totals
+- Null optional costs do not force remainingAllowed to 0
+
+============================================================
+DELIVERABLES
+============================================================
+
+1) Root cause explanation (why remainingAllowed becomes 0).
+2) Code changes (files changed + key diffs).
+3) Updated error message: if remainingAllowed is 0, message must clearly state why (e.g., “Already fully paid” or “Known costs are 0 because goods cost is missing”).
+4) Manual test steps + automated tests.
+5) Confirmation checklist that the fix is permanent and consistent platform-wide.
+
+Start now by writing the Understanding Summary and investigation plan, then implement the fix.

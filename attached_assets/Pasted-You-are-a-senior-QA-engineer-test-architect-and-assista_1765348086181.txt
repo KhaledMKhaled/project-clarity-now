@@ -1,0 +1,460 @@
+You are a senior QA engineer, test architect, and assistant developer.
+
+Your task:
+Thoroughly TEST the complete Shipment, Costing, Payments, and Inventory workflows of the current system using FAKE DEMO DATA.
+System login Username is : root and password is : 123123123
+
+You must:
+1) Detect bugs and inconsistencies.
+2) Clearly document them.
+3) Analyze their root cause.
+4) Propose concrete fixes (with code/config suggestions).
+5) If the environment allows code changes, APPLY the fix.
+6) RE-RUN the relevant tests to confirm the issue is resolved.
+7) If you cannot apply changes directly, output the exact steps and code needed so a developer can implement the fix.
+
+Goal:
+- Make sure ALL functions work correctly.
+- Make sure ALL workflows and the full lifecycle (from new shipment to final payment and inventory) are complete and consistent.
+- Specifically investigate and diagnose this known issue:
+  > "There is a problem displaying the shipment when it is added to complete the process."
+- Verify that every piece of information is stored and displayed correctly in the UI (Arabic, RTL).
+
+Important context:
+- The UI is in Arabic only and RTL.
+- The system works with two main currencies only:
+  - RMB (رممبي)
+  - EGP (جنيه مصري)
+- USD may be used only as an original reference in shipping, but all final balances and totals use RMB/EGP.
+
+==================================================
+1. TEST SETUP & DEMO DATA
+==================================================
+
+1.1. Users & Roles
+Create or verify at least these test users (with Arabic names allowed):
+
+- Admin user ("مدير") with full access.
+- Accountant user ("محاسب") with access to shipments, costing and payments.
+- Inventory Manager user ("مسؤول مخزون") with read access + inventory posting.
+- Viewer user ("مشاهد") with read-only access.
+
+Validate:
+- Each role can only see/modify what they are allowed to.
+- Unauthorized actions are blocked with clear Arabic messages.
+
+If any permissions are incorrect:
+- Identify the missing/extra permissions.
+- Propose the changes in role/permission configuration (and apply if possible).
+
+1.2. Basic Reference Data (Demo)
+Using the Admin or Accountant role, create demo records:
+
+(1) Suppliers (الموردون)
+- Create at least 3 suppliers from China with different names and some optional fields (phone, email, address).
+- Make sure you can:
+  - Create a supplier.
+  - Edit a supplier.
+  - Deactivate / activate a supplier (if supported).
+
+(2) Products (الأصناف)
+- Create at least 3–5 products with:
+  - Different Arabic names.
+  - Different types (TYP) such as "أحذية", "ملابس", "حلويات".
+  - Different default suppliers.
+- Verify the products are selectable later when adding shipment items.
+
+(3) Exchange Rates (أسعار الصرف)
+- Insert demo exchange rates for:
+  - RMB → EGP on:
+    - purchase_date_1
+    - purchase_date_2
+    - shipping_date_1
+    - shipping_date_2
+    - payment_date_1 / payment_date_2
+  - USD → RMB on:
+    - shipping_date_1
+    - shipping_date_2
+- Verify:
+  - You can create, edit, and (if allowed) delete exchange rates.
+  - The system uses the correct rate based on date and currency.
+  - Old shipments keep using their original stored rates (no recalculation with new rates).
+
+If you find misused or missing exchange rates:
+- Analyze how the system chooses rates.
+- Propose and/or implement corrections in the rate selection logic.
+
+==================================================
+2. CREATE DEMO SHIPMENTS & FULL WORKFLOW
+==================================================
+
+Create at least THREE shipments with different behaviors:
+
+- Shipment A: Fully costed and fully paid.
+- Shipment B: Fully costed but partially paid (balance remaining).
+- Shipment C: Fully costed but overpaid (balance negative).
+
+For each shipment, test the ENTIRE workflow:
+
+-------------------------
+2.1. Step 1 – Import (الاستيراد)
+-------------------------
+
+For each shipment (A/B/C):
+
+1) Create a new shipment:
+   - Set shipment_name, shipment_code, purchase_date.
+
+2) Add multiple items to the shipment:
+   - Use different suppliers for different items.
+   - Use different TYP values.
+   - Use different CTN (cartons), PCS (pieces per carton), and PRI (RMB) values.
+   - Attach an image (fake) for at least one item.
+
+3) Validate calculations:
+   - COU = CTN × PCS is correct for each item.
+   - Total per item (RMB) = COU × PRI is correct.
+   - Total purchase cost (RMB) for the shipment = sum of item totals is correct.
+
+4) Save the shipment.
+
+5) BUG CHECK – Displaying shipment after creation:
+   - Verify the shipment appears in the main "الشحنات" list.
+   - Verify you can open the shipment again and see all items.
+   - If the shipment does NOT appear, or appears but cannot be opened:
+
+     → Treat this as a BUG:
+       - Document steps to reproduce.
+       - Describe expected vs actual behavior.
+       - Analyze root cause (e.g., incorrect query filter, wrong status, DB save issue).
+       - Propose a fix (queries, filters, or backend logic).
+       - If possible, APPLY the fix and repeat the test to confirm the shipment now displays correctly.
+
+-------------------------
+2.2. Step 2 – Shipping (الشحن)
+-------------------------
+
+For each shipment:
+
+1) Open the shipment and navigate to the "بيانات الشحن" step.
+
+2) Enter:
+   - Commission rate (%) with different values per shipment.
+   - Shipping area (sqm).
+   - Shipping cost per sqm in USD (demo values).
+   - A shipping date that has exchange rates configured.
+
+3) Validate:
+   - Commission (RMB) is calculated correctly from total purchase cost.
+   - Commission (EGP) = commission (RMB) × RMB→EGP rate (correct date).
+   - Total shipping cost in USD (original) = shipping_area × cost_per_sqm_usd.
+   - USD → RMB conversion is correct using the specified rate.
+   - RMB → EGP conversion is correct using the specified rate.
+   - All these values are shown correctly in Arabic labels and RTL layout.
+   - After saving, the shipment status changes to "جاهزة للاستلام".
+
+4) BUG CHECK – Displaying shipment after shipping:
+   - Verify the shipment still appears in the main list with updated status.
+   - Verify you can reopen the shipment and see the shipping data.
+   - If it disappears or cannot be edited:
+
+     → Document as a bug and:
+       - Identify at which status or filter level the shipment is hidden.
+       - Inspect list queries/filters and detail-loading logic.
+       - Propose and/or apply changes so that:
+         - The shipment remains visible in all relevant screens.
+       - Re-test shipping step for another demo shipment to confirm the fix.
+
+-------------------------
+2.3. Step 3 – Customs & Takhreeg (الجمارك والتخريج)
+-------------------------
+
+For each shipment:
+
+1) Navigate to the customs/takhreeg step.
+
+2) For every item in the shipment:
+   - Enter:
+     - customs_cost_per_carton_egp (different values).
+     - takhreeg_cost_per_carton_egp (different values).
+   - Validate:
+     - total_customs_cost_egp = CTN × customs_cost_per_carton_egp.
+     - total_takhreeg_cost_egp = CTN × takhreeg_cost_per_carton_egp.
+
+3) At shipment level:
+   - Check that:
+     - total_customs_cost_egp = sum of per-item customs totals.
+     - total_takhreeg_cost_egp = sum of per-item takhreeg totals.
+   - Set the customs_invoice_date.
+
+4) Save and complete the step.
+
+5) Validate:
+   - Shipment status becomes "مستلمة بنجاح".
+   - All customs and takhreeg totals are shown correctly.
+   - Final cost breakdown in EGP is updated:
+     - purchase_cost_egp
+     - commission_cost_egp
+     - shipping_cost_egp
+     - customs_cost_egp
+     - takhreeg_cost_egp
+     - final_total_cost_egp
+
+6) BUG CHECK – Displaying shipment after customs:
+   - Ensure the shipment still appears in:
+     - Shipments list.
+     - Shipment details page.
+     - Customs/takhreeg step.
+   - If it disappears or cannot be reopened:
+     - Document and analyze the cause (e.g., status filter, missing join, wrong conditions).
+     - Propose or apply a fix.
+     - Re-test with another shipment to confirm the issue is resolved.
+
+-------------------------
+2.4. Step 4 – Shipment Summary & Inventory
+-------------------------
+
+For each shipment:
+
+1) Open the "ملخص الشحنة" screen.
+
+2) Verify:
+   - The breakdown of costs in EGP:
+     - شراء
+     - عمولة
+     - شحن
+     - جمارك
+     - تخريج
+     - إجمالي تكلفة الشحنة (جنيه).
+   - The corresponding RMB values where applicable.
+   - The total cartons and total pieces per type/product are displayed correctly.
+   - Currency conversion dates and rates match the demo data.
+
+3) Check Inventory integration:
+   - Verify that inventory entries (inventory_movements) were created for each item:
+     - total_pieces_in equals COU for each item.
+     - unit_cost_egp and total_cost_egp are consistent with final_total_cost_egp distribution logic.
+   - Confirm that the Inventory overview screen shows the new stock with correct quantities and costs.
+
+4) If any totals or quantities in the summary or inventory do not match data from previous steps:
+   - Document the inconsistency.
+   - Analyze whether it’s a calculation, rounding, or mapping bug.
+   - Propose precise changes in calculation logic or DB fields.
+   - If possible, apply the fix and re-run the summary/inventory tests.
+
+==================================================
+3. PAYMENTS & SETTLEMENT SCENARIOS
+==================================================
+
+Use the three shipments (A, B, C) to test different payment scenarios.
+
+-------------------------
+3.1. Shipment A – Fully Paid
+-------------------------
+
+1) Open Shipment A, go to the "سداد تكلفة الشحنة" tab.
+
+2) Add multiple payments ONLY in EGP, on different dates, such that:
+   - Total of all payments = final_total_cost_egp exactly.
+
+3) Verify:
+   - For each payment:
+     - amount_original = amount_egp (currency EGP).
+     - Payment method and cash receiver (for cash) are stored correctly.
+     - Any references/notes/attachments are visible.
+   - total_paid_egp = final_total_cost_egp.
+   - balance_egp = 0.
+   - The UI shows "الشحنة مسددة بالكامل".
+   - The “الرصيد قبل/بعد الدفع” values make sense and follow the sequence of payments.
+
+If any of these do not hold:
+- Identify if the bug is in:
+  - Stored values.
+  - UI calculation logic.
+  - Backend aggregation.
+- Propose or apply code/DB fixes and re-test.
+
+-------------------------
+3.2. Shipment B – Partially Paid
+-------------------------
+
+1) Open Shipment B, go to "سداد تكلفة الشحنة".
+
+2) Add payments (some in EGP, optionally some in RMB) so that:
+   - total_paid_egp < final_total_cost_egp.
+
+3) Verify:
+   - For RMB payments, check:
+     - amount_original (RMB) is saved.
+     - exchange_rate_to_egp is used correctly.
+     - amount_egp is correct.
+   - total_paid_egp < final_total_cost_egp.
+   - balance_egp > 0.
+   - The UI clearly shows "متبقي عليك: X جنيه".
+   - The last payment date is correct and appears on:
+     - Shipment details.
+     - Global payments overview ("سداد الشحنات").
+   - The payments ledger lists all payments with correct amounts and currencies.
+
+If the remaining balance or last payment date are wrong:
+- Diagnose whether aggregation or data mapping is incorrect.
+- Propose or implement the fix and test again.
+
+-------------------------
+3.3. Shipment C – Overpaid (رصيد لصالحك)
+-------------------------
+
+1) Open Shipment C, go to "سداد تكلفة الشحنة".
+
+2) Add payments (EGP and/or RMB) so that:
+   - total_paid_egp > final_total_cost_egp.
+
+3) Verify:
+   - balance_egp < 0.
+   - The UI clearly shows something like:
+     - "مدفوع زيادة: X جنيه" or "رصيد لصالحك: X جنيه".
+   - No validation error appears when paying more than the remaining balance.
+   - Global payments overview shows the shipment with “overpaid” status correctly.
+
+If the system blocks overpayment or miscalculates the negative balance:
+- Document behavior.
+- Suggest relaxing validation logic and adjusting balance display logic.
+- Apply changes if possible and re-test.
+
+-------------------------
+3.4. Global Payments Overview – "سداد الشحنات"
+-------------------------
+
+1) Open the global "سداد الشحنات" screen.
+
+2) Verify summary cards:
+   - إجمالي تكلفة الشحنات (جنيه).
+   - إجمالي المدفوع (جنيه).
+   - إجمالي المتبقي (جنيه) — sum of positive balances.
+   - إجمالي المدفوع زيادة (جنيه) — sum of negative balances as positive.
+   - أحدث عملية سداد — last payment date, shipment, and amount.
+
+3) Verify the table listing shipments:
+   - Each shipment A/B/C shows:
+     - final_total_cost_egp.
+     - total_paid_egp.
+     - balance_egp with correct text (متبقي / مسددة / مدفوع زيادة).
+     - last_payment_date.
+
+4) Test filters:
+   - Filter by payment status:
+     - Only fully paid.
+     - Only with remaining balance.
+     - Only overpaid.
+   - Filter by date range of last payment.
+   - Filter by shipment code or name.
+
+5) Open the payments ledger (كشف حركة السداد):
+   - Verify that all payments for A/B/C appear.
+   - Check that:
+     - Number of operations.
+     - Total amount_egp for the filtered period.
+   - Filters by date, shipment, method, and user work correctly.
+
+If any filter or total is wrong:
+- Document and identify the problematic query/aggregation.
+- Propose or apply a fix and re-check.
+
+==================================================
+4. BUG FOCUS: SHIPMENT DISPLAY ISSUE
+==================================================
+
+Throughout ALL tests, focus on:
+
+> "There is a problem displaying the shipment when it is added to complete the process."
+
+Explicitly verify at each stage:
+- After creating a shipment.
+- After completing the import step.
+- After saving shipping details.
+- After customs & takhreeg.
+- After adding payments.
+- After posting to inventory.
+
+For every stage:
+- Confirm the shipment is visible where expected (lists, detail views, tabs).
+- If at any point the shipment is missing or not loadable:
+
+  1) Document the bug:
+     - Exact steps to reproduce.
+     - Role used.
+     - Expected vs actual behavior.
+     - Any errors.
+  2) Inspect:
+     - Status values.
+     - Filters on the list.
+     - Backend queries / endpoints (conceptually).
+  3) Propose a fix:
+     - For example: include all relevant statuses, correct joins, or adjust where conditions.
+  4) If possible, apply the fix:
+     - Then re-run the same steps with a new demo shipment.
+     - Confirm the shipment now appears correctly and that the full process can be completed.
+
+==================================================
+5. LANGUAGE, TOOLTIP, AND AUDIT CHECKS
+==================================================
+
+5.1. UI Language & Tooltips
+- Confirm:
+  - All visible labels, messages, and headings are in Arabic.
+  - Layout is RTL.
+  - Main menu tooltips appear on hover and are in Arabic, describing each module correctly.
+
+If you find English text or missing tooltips:
+- List the affected components.
+- Suggest corrected Arabic text and where it should be placed.
+
+5.2. Audit Logs
+- Confirm that for key actions there are entries in `audit_logs`, including:
+  - Creating/editing a shipment.
+  - Changing shipment status.
+  - Adding/editing/deleting payments.
+  - Adding/updating exchange rates.
+
+Each log should include:
+- user_id
+- entity_type
+- entity_id
+- action_type
+- timestamp
+- details
+
+If important actions are not logged:
+- Identify which events need logging.
+- Suggest where logging calls should be added in the backend.
+
+==================================================
+6. OUTPUT – QA & FIX REPORT
+==================================================
+
+At the end of your testing and fixing work, produce a structured report that includes:
+
+1) Overview of all scenarios tested (Shipments A, B, C and any additional tests).
+2) List of features that are confirmed working correctly.
+3) Detailed list of all defects/bugs discovered, each with:
+   - Bug ID / title.
+   - Steps to reproduce.
+   - Expected behavior.
+   - Actual behavior.
+   - Root cause analysis (where you think the problem is).
+   - Proposed fix:
+     - Which module/file/endpoint or DB table.
+     - Suggested code or logic change (pseudo-code is acceptable if exact code is not available).
+   - Whether you were able to APPLY the fix.
+   - Results of re-testing after applying the fix (PASS/FAIL).
+
+4) If some bugs cannot be fixed automatically:
+   - Provide exact instructions and code snippets for a developer to implement.
+   - Mark them clearly as “Pending Manual Fix”.
+
+5) Any suggestions to improve:
+   - Usability of the Arabic UI.
+   - Clarity of tooltips, labels, and validation messages.
+   - Robustness and clarity of workflows.
+
+Be thorough, systematic, and assume this system is going to production. Your goal is to ensure the **entire process cycle is complete, correct, and self-consistent**, and that any discovered issues are either fixed or clearly documented with actionable fix proposals.

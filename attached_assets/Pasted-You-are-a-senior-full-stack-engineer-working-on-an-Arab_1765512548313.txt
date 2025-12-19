@@ -1,0 +1,130 @@
+You are a senior full-stack engineer working on an Arabic, RTL web app for managing shipments, inventory, and payments.
+
+Your task: FIX the following issues and improve the related screens while keeping the existing business logic intact.
+
+==================================================
+1. SHIPMENT STATUS & COLOR CODING
+==================================================
+
+1) Make sure shipment status values are working correctly and are updated at the right steps in the workflow, for example:
+   - "جديدة"
+   - "جاهزة للاستلام"
+   - "مستلمة بنجاح"
+   - "مؤرشفة"
+   (or whatever exact statuses already exist in the system).
+
+2) Define a fixed color code for EACH status (e.g., using a central config or enum), such as:
+   - جديدة          → Color A
+   - جاهزة للاستلام → Color B
+   - مستلمة بنجاح   → Color C
+   - مؤرشفة         → Color D
+
+3) Apply these colors consistently everywhere in the app:
+   - Shipments list
+   - Shipment details
+   - Payments / balances screens
+   - Any dashboards or reports
+
+Do NOT hard-code different colors in different components. Use a single shared mapping so that each status always has the same color.
+
+==================================================
+2. SHIPMENTS NOT SHOWING IN INVENTORY
+==================================================
+
+Currently, shipments are not appearing in the Inventory.
+
+1) Investigate why:
+   - Check when inventory records are supposed to be created (e.g., when status becomes "مستلمة بنجاح").
+   - Check the logic that writes to the inventory tables / collections.
+
+2) Fix the integration so that:
+   - When a shipment reaches the correct final status (for example "مستلمة بنجاح"):
+     - The related inventory records are created/updated correctly.
+   - The Inventory screen lists those items with the correct quantities and references to the shipment.
+
+3) Verify:
+   - Create a new shipment → complete all steps → mark it as received → check that it appears in Inventory.
+   - Make sure this does not duplicate old records for already processed shipments.
+
+==================================================
+3. FILTERS IN PAYMENT MOVEMENT / SHIPMENTS & BALANCES
+==================================================
+
+In:
+- "كشف حركة السداد" (Payments Movement)
+- "الشحنات و الأرصدة" (Shipments & Balances) screen
+
+Add filter controls so the user can filter by:
+
+1) Date range:
+   - "من تاريخ" / "إلى تاريخ"
+   - Use payment_date or shipment purchase date depending on the screen context.
+
+2) Shipment number (رقم الشحنة):
+   - Free text search that matches the shipment code/number.
+
+3) Shipment status (حالة الشحنة):
+   - Dropdown with:
+     - جديدة
+     - جاهزة للاستلام
+     - مستلمة بنجاح
+     - مؤرشفة
+     - الكل
+
+Make sure:
+- Filters update the list and any summary totals in real time (or on a “بحث / بحث جديد” button).
+- Filters can be combined (e.g., date + status + shipment number together).
+
+==================================================
+4. COLLAPSIBLE PAYMENT ROWS PER SHIPMENT
+==================================================
+
+In the screen that shows:
+- Shipments and their balances
+- And/or in "كشف حركة السداد" where multiple payments belong to the same shipment
+
+Implement a collapsible / foldable view for multiple payments per shipment:
+
+1) For each shipment:
+   - Show a main row with:
+     - Shipment code
+     - Supplier
+     - Total cost (EGP)
+     - Total paid (EGP)
+     - Remaining (EGP)
+     - Payment status (no payment / partial / fully paid)
+
+2) If the shipment has multiple payments:
+   - Allow the user to expand/collapse the payment details under that row (Collapsible / Accordion style).
+   - When expanded, show a nested table with all payments for that shipment:
+     - Payment date
+     - Original amount + currency
+     - Amount in EGP
+     - "تحت حساب" (تكلفة البضاعة / الشحن / الجمرك والتخريج)
+     - Payment method (نقدي / فودافون كاش / إنستاباي / تحويل بنكي / أخرى)
+     - Cash receiver (if any)
+     - Reference
+     - Notes
+
+3) When collapsed:
+   - Only the main summary row is visible, so the screen stays clean and easy to scan.
+
+4) Make sure:
+   - Collapsible behavior works smoothly (toggle open/close).
+   - Totals (total paid, remaining) in the main row are always in sync with the payment details.
+
+==================================================
+GENERAL NOTES
+==================================================
+
+- Keep all UI labels in Arabic and layout RTL.
+- Do not change the underlying business rules, only fix behavior and UX for:
+  - Shipment status + color codes,
+  - Inventory visibility,
+  - Filters in payment-related screens,
+  - Collapsible payment display per shipment.
+- After changes, test with demo data and confirm:
+  - Status colors are consistent everywhere.
+  - Shipments appear in inventory when expected.
+  - Filters by date, shipment number, and shipment status work correctly.
+  - Collapsible payment rows behave correctly for shipments with multiple payments.

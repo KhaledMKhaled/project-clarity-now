@@ -1,0 +1,175 @@
+You are working inside a Replit codebase for **FodaStore**, a shipment- and supplier-centric back-office platform. The system tracks shipments, shipment items, suppliers, exchange rates (RMB↔EGP and USD↔RMB), shipping details, payments, inventory movements, and accounting analytics. It uses Passport local authentication with Postgres-backed sessions (HTTP-only cookies; secure in production), strict role-based access control, and centralized audit logging for key mutations.
+
+FIRST: Before writing any solution, produce a short “Understanding Summary” of what you believe the bug and the feature request are, and explicitly confirm correctness. Include 3–7 improvement suggestions or logical checks (edge cases, data consistency, UX clarity). ONLY AFTER that, write the implementation plan and then implement changes.
+
+============================================================
+GOALS
+============================================================
+
+A) FIX CRITICAL BUG (Payments not saved)
+In the “Shipment Payments / Add Payment” screen, when I try to add a new payment amount (either in EGP or RMB), it fails to save and shows an error. You must diagnose and fix the root cause end-to-end (frontend + backend + DB). After the fix, saving a payment must work normally and all related features must remain correct.
+
+B) ADD UI FEATURE (Invoice Summary Hyper Button)
+Inside the “New Payment” screen, add a fast “Invoice Summary” button that opens a modal/drawer/panel showing a breakdown of the shipment invoice by category and currency, including paid and remaining per currency:
+- RMB:
+  1) Goods cost (RMB): total, paid (RMB), remaining (RMB)
+  2) Shipping cost (RMB) and Commission (RMB) as separate lines, plus RMB subtotal, paid (RMB), remaining (RMB)
+- EGP:
+  3) Customs (EGP) and Takhreeg (EGP) as separate lines, plus EGP subtotal, paid (EGP), remaining (EGP)
+
+============================================================
+NON-NEGOTIABLE SYSTEM RULES (MUST PRESERVE)
+============================================================
+
+1) Authentication & Sessions
+- Passport local username/password login
+- Postgres session store
+- root-user bootstrap for first-run access
+- Session cookies are HTTP-only; secure in production
+
+2) Authorization (RBAC)
+- isAuthenticated protects all protected routes
+- requireRole enforces role-based access (e.g., Manager / Accountant)
+- isAdmin is Manager-only
+
+3) Payments (Data Integrity)
+- Validate payload, including payment date parsing
+- Prevent overpayment (block and return clear error)
+- Update shipment totals atomically: totalPaid, balance, lastPaymentDate
+- Normalize currency using exchange rates when required
+- Record creator (who made the payment)
+- Audit-log key mutations (payments, shipments affected, status changes)
+
+4) Security & Data Hygiene
+- User listing endpoints must strip passwords
+- Do not weaken validation, RBAC, or auditability
+
+============================================================
+PART A — BUG FIX: “ADD PAYMENT DOES NOT SAVE”
+============================================================
+
+1) Reproduce & Capture Evidence
+- Reproduce from the UI with:
+  - EGP payment
+  - RMB payment
+- Capture and document:
+  - Network request: URL, method, payload, headers (especially cookies/credentials)
+  - Response: HTTP status + body
+  - Server logs / stack trace
+  - Any frontend error messages
+- Determine which layer fails:
+  - Auth/session (cookie not sent, CORS, unauthorized)
+  - RBAC (requireRole denial)
+  - Frontend schema mismatch (field names/types)
+  - Backend validation/date parsing bug
+  - Missing/incorrect exchange rate logic for RMB
+  - Storage transaction failure (DB constraint, null, numeric overflow, timezone/date)
+  - Overpayment logic incorrectly triggered
+
+2) Fix the Root Cause (No Workarounds)
+Backend requirements:
+- Ensure the create-payment endpoint:
+  - Validates schema strictly and returns actionable error messages
+  - Parses paymentDate robustly (ISO safe, timezone-safe)
+  - Accepts numbers consistently (handle string numbers from UI safely)
+  - Correctly handles EGP vs RMB payments:
+    - If RMB payment requires a rate, enforce it and/or fetch latest by documented rules
+    - Normalize to EGP only if that is the system’s invariant, but always preserve original currency info if needed
+  - Prevents overpayment reliably
+  - Executes in a single DB transaction:
+    - Create payment record
+    - Update shipment totalPaid/balance/lastPaymentDate
+    - Write audit log entry
+Frontend requirements:
+- Ensure the UI sends exactly what the API expects (field names, types)
+- Ensure requests include session cookies/credentials if needed
+- Show precise error messages returned by the API (no generic “failed”)
+- After success, refresh payment list + shipment balances and update any dependent views
+
+3) Regression Checks (Must Verify)
+After the fix:
+- Payment is saved and visible in payments listing/history
+- Shipment totals (paid/balance/lastPaymentDate) update correctly
+- Dashboard and accounting analytics reflect the new payment
+- Supplier balances/statements update correctly if they depend on shipment payments
+- Overpayment is blocked with a clear message
+- Audit logs contain meaningful details (actor, entity, action, serialized details)
+
+4) Automated Tests (Required)
+Add/extend tests to cover:
+- Create EGP payment success
+- Create RMB payment success (with rate rules)
+- Missing/invalid payment date returns clear error
+- Missing RMB rate returns clear error (if required)
+- Overpayment blocked
+- Transaction atomicity: if shipment update fails, payment must not persist; if payment insert fails, shipment must not update
+
+============================================================
+PART B — FEATURE: “INVOICE SUMMARY” BUTTON IN NEW PAYMENT SCREEN
+============================================================
+
+1) UI/UX
+- Add a button: “Invoice Summary” / “View Invoice Breakdown”
+- On click: open a modal/drawer/panel
+- Works when a shipment is selected/loaded
+- Updates after adding a payment (no stale data)
+
+2) Computation Rules (Paid/Remaining by Currency)
+Preferred approach:
+- Compute Paid (RMB) as sum of RMB payments (original amounts)
+- Compute Paid (EGP) as sum of EGP payments (original amounts)
+
+If the current schema only stores EGP-normalized totals and does NOT preserve original RMB amounts:
+- Implement a minimal, safe schema update to store for each payment:
+  - originalCurrency (EGP/RMB)
+  - originalAmount
+  - usedRate (when applicable)
+  - normalizedAmountEGP (if needed)
+- Write migration + update any affected queries and tests
+
+3) Backend Support (If Needed)
+If frontend cannot compute breakdown reliably, add:
+GET /shipments/:id/invoice-summary
+
+Return JSON like:
+{
+  "shipmentId": 123,
+  "rmb": {
+    "goodsTotal": 0,
+    "shippingTotal": 0,
+    "commissionTotal": 0,
+    "subtotal": 0,
+    "paid": 0,
+    "remaining": 0
+  },
+  "egp": {
+    "customsTotal": 0,
+    "takhreegTotal": 0,
+    "subtotal": 0,
+    "paid": 0,
+    "remaining": 0
+  },
+  "computedAt": "ISO_DATE",
+  "notes": []
+}
+
+- Protect the endpoint with isAuthenticated + appropriate role checks
+- Do NOT spam audit logs for pure GET endpoints
+
+4) Acceptance Criteria
+- Modal shows:
+  - RMB section: Goods, Shipping, Commission, RMB subtotal, paid, remaining
+  - EGP section: Customs, Takhreeg, EGP subtotal, paid, remaining
+- Currency formatting is clear (RMB vs EGP)
+- No regressions in shipments, payments, inventory, dashboards, accounting reports
+
+============================================================
+DELIVERABLES
+============================================================
+
+1) Bug fix: payments save successfully (EGP + RMB), with correct balances and clear errors when invalid.
+2) Invoice Summary button + modal/drawer/panel inside New Payment screen.
+3) Tests for payments and critical edge cases.
+4) Short CHANGELOG or README note describing the root cause, fix, and how to test.
+
+BEGIN by producing the Understanding Summary + correctness confirmation. Then proceed with the implementation plan and actual code changes.

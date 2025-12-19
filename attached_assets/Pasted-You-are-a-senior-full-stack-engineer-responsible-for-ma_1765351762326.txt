@@ -1,0 +1,217 @@
+You are a senior full-stack engineer responsible for maintaining and fixing the existing shipments, costing, and payments system (with Arabic UI).
+
+Your task:
+Investigate and FIX the following issues, then SAVE all changes and verify that everything works correctly end-to-end with test data. Do NOT change the business logic that was already agreed, only fix bugs and missing behavior based on the details below.
+
+==================================================
+1. SAVE ERRORS IN SHIPMENT WORKFLOW
+==================================================
+
+There are three critical save actions that currently show a generic error message in Arabic: "حدث خطأ" ("An error occurred"):
+
+1) On the shipment data page (بيانات الشحنة):
+   - When the user clicks "حفظ" (Save), the system displays "حدث خطأ" and does NOT save.
+
+2) On the customs and takhreeg page (الجمارك و التخريج):
+   - When the user clicks "حفظ" (Save), the system displays "حدث خطأ" and does NOT save.
+
+3) At the end of the shipment process (final step: save / complete receipt):
+   - When the user clicks "حفظ" or "إنهاء استلام", the system displays "حدث خطأ" and does NOT complete the process.
+
+Your job:
+
+- Reproduce each of these errors.
+- Analyze the root cause (validation, backend exception, missing fields, bad query, etc.).
+- Fix the underlying problems so that:
+  - Saving shipment data works correctly.
+  - Saving customs & takhreeg works correctly.
+  - Final save / "end receive" completes successfully and updates shipment status and all related data.
+- Replace the generic "حدث خطأ" with:
+  - Proper success messages when saving works.
+  - Clear, specific Arabic error messages when validation fails.
+- After fixing, re-test the full workflow (import → shipping → customs/takhreeg → finalize) to ensure no more save errors.
+
+==================================================
+2. WRONG REMAINING AMOUNT IN PAYMENTS SCREEN
+==================================================
+
+In the "سداد الشحنات" (Shipments Payment) screen, the calculation of the **remaining amount** is incorrect.
+
+Required logic:
+
+- Let:
+  - total_cost_egp = إجمالي تكلفة الشحنة بالجنيه المصري
+  - total_paid_egp = إجمالي المدفوع حتى الآن
+  - remaining_egp = المتبقي على الشحنة
+  - extra_paid_egp = المبلغ الزائد (إن وجد)
+
+The correct behavior must be:
+
+1) The remaining amount must be:
+   - remaining_egp = total_cost_egp - total_paid_egp
+   - But remaining_egp must NEVER be negative in the “remaining” field.
+   - Instead:
+     - remaining_egp = max(0, total_cost_egp - total_paid_egp)
+
+2) If total_paid_egp > total_cost_egp:
+   - There is an overpayment.
+   - In this case:
+     - remaining_egp must be 0.
+     - extra_paid_egp = total_paid_egp - total_cost_egp.
+     - extra_paid_egp is only for notification/alert and should be shown clearly as "مبلغ زيادة" or "رصيد لصالحك".
+   - The remaining field must not include the extra amount.
+
+3) In all cases:
+   - The remaining field should represent ONLY:
+     - "إجمالي التكلفة مطروح منها إجمالي المدفوع" (but not less than zero).
+   - The extra amount (if any) is for alert only, and is used to offset remaining if there is a difference; if there is no remaining (remaining_egp = 0), the extra remains displayed as an “overpaid” value.
+
+Your job:
+
+- Fix the calculation of remaining_egp and extra_paid_egp in both:
+  - Backend calculations.
+  - UI display in the "سداد الشحنات" screen and the per-shipment payment tab.
+- Re-test with:
+  - A fully paid shipment.
+  - A partially paid shipment.
+  - An overpaid shipment.
+- Make sure the values are always correct and consistent across all views.
+
+==================================================
+3. CURRENCY RATES UPDATE & SYNC
+==================================================
+
+Currently, currency exchange rates are not being updated or synchronized properly.
+
+Required behavior:
+
+1) Manual update:
+   - Add the ability to manually trigger an update of currency rates (e.g., RMB→EGP, USD→RMB), or to manually enter new rates easily in the UI.
+   - After a manual update, the system should:
+     - Save the new rates.
+     - Display the last update time and date.
+
+2) Automatic update:
+   - Implement automatic refresh of currency rates **every hour**.
+   - After each automatic update, store:
+     - The new rates.
+     - The timestamp (date & time) of the update.
+
+3) Display of last update:
+   - In the "أسعار الصرف" area, clearly show:
+     - "آخر تحديث" with date and time of the last manual or automatic update.
+
+Note:
+- If you cannot actually call an external API in this environment, simulate this behavior via test data, but implement all code structure/hooks needed.
+- Make sure existing shipments keep using their original stored rates and are not recalculated retroactively.
+
+==================================================
+4. FILTERING IN SHIPMENT MOVEMENT / REPORT
+==================================================
+
+In the "كشف حركة الشحنات" (Shipments Movement / History) screen:
+
+- There is currently no filter by:
+  - Shipment date (تاريخ الشحنة = تاريخ الشراء).
+  - Shipment number (رقم الشحنة).
+
+Required:
+
+- Add filters for:
+  - Purchase date range:
+    - From / To.
+  - Shipment code / number.
+- Make sure:
+  - Filtering by date returns only shipments whose purchase date is within the selected range.
+  - Filtering by shipment number returns the correct shipment(s).
+- Re-test with multiple demo shipments to ensure the filters work correctly and can be combined (e.g., filter by date and shipment number together).
+
+==================================================
+5. BROKEN CRUD BUTTONS ON SHIPMENTS PAGE
+==================================================
+
+On the main Shipments page (قائمة الشحنات):
+
+- The CRUD buttons in the UI (Create, Read/View, Update/Edit, Delete) are **not working**.
+
+Your job:
+
+- Identify why the CRUD buttons do not work:
+  - Missing click handlers?
+  - Wrong routes?
+  - API endpoints misconfigured?
+  - Permission issues?
+- Fix each button so that:
+  - "إضافة شحنة جديدة" opens the create shipment form.
+  - "عرض" opens the shipment details view.
+  - "تعديل" opens the edit form for the selected shipment.
+  - "حذف" deletes (or soft deletes) the selected shipment according to business rules.
+- Ensure all these buttons:
+  - Work correctly with the correct shipment ID.
+  - Show proper Arabic success/error messages.
+- Re-test with demo shipments.
+
+==================================================
+6. SHIPMENT STATUS AUTO-UPDATE
+==================================================
+
+Shipment statuses are not updating automatically as the workflow progresses.
+
+Required status behavior:
+
+- When a shipment is first created and items are imported:
+  - status = "جديدة" (or equivalent initial status).
+- After shipping details are saved successfully:
+  - status should automatically change to "جاهزة للاستلام".
+- After customs & takhreeg are completed and final save/receive is done:
+  - status should automatically change to "مستلمة بنجاح".
+
+Your job:
+
+- Ensure status transitions happen automatically when each step is successfully completed.
+- Make sure the status is updated in:
+  - Database.
+  - All relevant UI screens (shipments list, details, summary, payments).
+- Re-test the full workflow from creation to final receipt to confirm statuses change correctly and are displayed correctly.
+
+==================================================
+7. GENERAL FIX & VERIFICATION
+==================================================
+
+For EACH of the issues above, you must:
+
+1) Reproduce the problem with fake demo data.
+2) Investigate and determine the root cause (backend, frontend, DB, configuration).
+3) Implement a robust fix:
+   - Adjust code, queries, validation, or configuration as needed.
+4) If the environment allows code changes:
+   - APPLY the fix.
+   - RE-RUN the relevant part of the workflow to confirm the issue is resolved.
+5) If you cannot apply changes directly:
+   - Output precise, developer-ready instructions:
+     - Which files/modules to edit.
+     - Before/after code snippets.
+     - Any DB migrations or configuration changes required.
+
+==================================================
+8. FINAL OUTPUT
+==================================================
+
+At the end, produce a concise but clear report with:
+
+- A checklist of each issue (1 to 6) and whether it is:
+  - Fixed & verified, or
+  - Still pending (with reasons).
+- For each fixed issue:
+  - A short description of the root cause.
+  - A summary of the changes you made.
+  - The tests you ran to confirm the fix.
+- For any remaining issue you cannot fix automatically:
+  - Exact steps and code/config changes that a human developer must apply.
+
+Make sure that after all fixes:
+- The full shipment cycle works correctly (create → import → shipping → customs/takhreeg → finalize).
+- Shipments are always displayed correctly at each step.
+- Payments and remaining amounts are calculated correctly.
+- Currency rates can be updated manually and automatically, with last update time shown.
+- Filters, CRUD buttons, and status updates all work as expected.

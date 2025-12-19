@@ -1,0 +1,134 @@
+I want a **strong, high-pressure system test** with a large amount of data to ensure:
+- Every field in the system works correctly
+- Every function and calculation is correct and precise
+- Every relationship between entities is correct
+- Every workflow path and lifecycle state works successfully and returns expected results
+
+**TOP PRIORITY (MOST IMPORTANT): PAYMENTS / ADD PAYMENT FLOW**
+You must focus most of the effort on the “Add Payment” feature and everything connected to it:
+- Payment creation must save correctly (EGP and RMB)
+- Remaining/allowed amount must be correct
+- Overpayment must be blocked correctly
+- Atomic updates to shipment totals must be correct
+- Payment history, dashboards, accounting reports, supplier statements, and audit logs must all reflect payments correctly
+- Payments must work for every shipment status and every allowed role
+
+You must **NOT stop** until:
+1) You have seeded realistic high-volume data,
+2) You have executed a full suite of scenario tests (manual + automated) with heavy focus on payments,
+3) You have fixed every discovered issue (root cause, not workaround),
+4) You have re-tested exactly what you fixed,
+5) You provide an evidence-based final report.
+
+============================================================
+ABSOLUTE RULES (MUST PRESERVE)
+============================================================
+
+- Authentication: Passport local username/password, Postgres session store, root-user bootstrap; HTTP-only cookies; secure cookies in production.
+- RBAC: isAuthenticated protects; requireRole enforces roles (Manager/Accountant); isAdmin is Manager-only.
+- Audit logging: all critical create/update/delete/status-change actions must write to audit_logs with actor/entity/action/details.
+- Data integrity:
+  - Use transactions for multi-write operations (shipments+items, payments+shipment totals, status updates+inventory movements).
+  - Prevent overpayment.
+  - Payment creation must update shipment totalPaid/balance/lastPaymentDate atomically.
+  - Currency conversion must use valid exchange rates with traceability where applicable.
+- Do not weaken validations, RBAC, or auditability.
+
+============================================================
+HOW TO EXECUTE (MANDATORY)
+============================================================
+
+PHASE 1 — Understanding Summary (Before Any Changes)
+Write a short summary confirming:
+- You will stress-test the platform with high-volume data
+- You will validate all fields, calculations, and relationships
+- You will cover the full shipment lifecycle and all workflows
+- The #1 focus is “Add Payment” flow
+Then list at least 10 scenarios you will test (minimum 10, more is better), with at least 6 scenarios dedicated to payments.
+
+PHASE 2 — Create High-Volume Test Data (Seed/Fixtures)
+Create a deterministic seed strategy (repeatable) generating realistic large data, including:
+- Users: root/admin (Manager), manager, accountant, restricted role user
+- Suppliers: 20+ suppliers
+- Exchange rates: RMB→EGP and USD→RMB for multiple dates (e.g., last 60 days)
+- Shipments: 200–1000 shipments distributed across statuses:
+  - New / Awaiting Shipping / Ready for Pickup / Received Successfully
+- Items: 3–20 items per shipment with RMB costs, quantities, customs/takhreeg per item
+- Shipping details: present for some shipments; missing for others (valid partial-data cases)
+- Payments: many payments per shipment, including:
+  - partial payments
+  - mixed currencies (EGP and RMB)
+  - multiple payment methods
+  - realistic dates
+  - intentional edge cases (attempted overpayments, missing rate submissions, etc.)
+- Inventory movements: auto-generated for received shipments
+
+Requirements:
+- Validate referential integrity (no orphan rows).
+- Mix edge cases: null optional fields, zero values, large quantities, decimals, and date edge cases.
+- Ensure enough data exists to “pressure test” queries and dashboards.
+
+PHASE 3 — Propose + Execute 10+ Scenarios (PAYMENTS-HEAVY)
+You must propose and then actually execute at least 10 scenarios.
+
+PAYMENTS (at least 6 scenarios):
+1) Add Payment on NEW shipment (only goods cost known):
+   - EGP payment allowed, saved, totals updated, visible everywhere
+
+2) Add Payment on NEW shipment with RMB payment:
+   - rate handling correct, saved, totals updated, visible everywhere
+
+3) Add Payment on shipment with partial costs (shipping/customs/takhreeg missing):
+   - payment still allowed; remainingAllowed computed from knownTotalCost; no “missing cost” blocking
+
+4) Overpayment attempt:
+   - blocked with clear message; no DB changes; totals unchanged
+
+5) Concurrency/locking test:
+   - simulate two payments submitted simultaneously; ensure atomicity and no double overshoot
+
+6) Status-matrix test:
+   - for each shipment status (New/Awaiting/Ready/Received) verify:
+     - create payment
+     - totals update atomically
+     - payment history correct
+     - dashboard/accounting reflect correctly
+
+7) Date parsing/timezone test:
+   - multiple date formats; ensure stable parsing and correct lastPaymentDate
+
+8) RBAC test for payments:
+   - allowed roles can add payments; forbidden roles get correct 403 message
+
+OTHER CORE SYSTEM (at least 4 scenarios):
+9) Shipment creation transaction correctness (shipment + items atomic, totals/balances initialized)
+10) Shipping detail upsert conversion correctness (USD→RMB→EGP + commission + traceability)
+11) Receiving shipment triggers inventory movements and landed-cost allocation correctness
+12) Accounting dashboards and supplier statements reflect seeded and real payments correctly
+
+PHASE 4 — Fix Issues Immediately + Retest
+For every failure:
+- Identify root cause (frontend/backend/DB/query/validation/calculation).
+- Fix properly (no bypass).
+- Re-run the exact failing scenario.
+- Add/extend a regression test for that bug.
+
+PHASE 5 — Evidence-Based Final Report
+Provide:
+- Scenario list executed with pass/fail (payments highlighted)
+- Bugs found + root causes + fixes
+- Files changed + key diffs
+- How to run seeds and tests in Replit
+- Confirmation checklist that payments are correct across:
+  - shipment views, payment history, dashboards, accounting reports, supplier statements, audit logs
+
+============================================================
+OUTPUT FORMAT REQUIREMENTS
+============================================================
+
+1) Start with “Understanding Summary” + scenarios list (payments-first).
+2) Then “Execution Plan” (seed approach + test approach).
+3) Then implement: seed data + tests + fixes + retests.
+4) End with final report and reproduction instructions.
+
+BEGIN NOW.
