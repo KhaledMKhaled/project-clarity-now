@@ -233,11 +233,14 @@ export default function Payments() {
     let latestInvoiceSummary = invoiceSummary;
     if (!latestInvoiceSummary && selectedShipmentId) {
       try {
-        latestInvoiceSummary = await queryClient.ensureQueryData<InvoiceSummary>([
-          "/api/shipments",
-          selectedShipmentId,
-          "invoice-summary",
-        ]);
+        latestInvoiceSummary = await queryClient.ensureQueryData<InvoiceSummary>({
+          queryKey: ["/api/shipments", selectedShipmentId, "invoice-summary"],
+          queryFn: async () => {
+            const res = await fetch(`/api/shipments/${selectedShipmentId}/invoice-summary`, { credentials: "include" });
+            if (!res.ok) throw new Error("Failed to fetch invoice summary");
+            return res.json();
+          },
+        });
       } catch (error) {
         toast({
           title: "تعذر التحقق من الحد المسموح للدفع",
