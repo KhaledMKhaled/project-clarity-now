@@ -1,48 +1,87 @@
 import { useState } from "react";
-import { Ship, Package, CreditCard, BarChart3, Shield, Globe, Loader2, Lock, User, ArrowLeft } from "lucide-react";
+import { Ship, Package, CreditCard, BarChart3, Shield, Globe, Loader2, Lock, Mail, User, ArrowLeft, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/useAuth";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function Landing() {
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeTab, setActiveTab] = useState<"login" | "signup">("login");
   const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const { signIn, signUp } = useAuth();
 
-  const loginMutation = useMutation({
-    mutationFn: async (data: { username: string; password: string }) => {
-      const res = await apiRequest("POST", "/api/login", data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      window.location.href = "/";
-    },
-    onError: (error: any) => {
-      toast({
-        title: "خطأ في تسجيل الدخول",
-        description: error.message || "اسم المستخدم أو كلمة المرور غير صحيحة",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username || !password) {
+    if (!email || !password) {
       toast({
         title: "خطأ",
-        description: "يرجى إدخال اسم المستخدم وكلمة المرور",
+        description: "يرجى إدخال البريد الإلكتروني وكلمة المرور",
         variant: "destructive",
       });
       return;
     }
-    loginMutation.mutate({ username, password });
+    
+    setIsSubmitting(true);
+    const { error } = await signIn(email, password);
+    setIsSubmitting(false);
+    
+    if (error) {
+      toast({
+        title: "خطأ في تسجيل الدخول",
+        description: error.message || "البريد الإلكتروني أو كلمة المرور غير صحيحة",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) {
+      toast({
+        title: "خطأ",
+        description: "يرجى إدخال البريد الإلكتروني وكلمة المرور",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (password.length < 6) {
+      toast({
+        title: "خطأ",
+        description: "كلمة المرور يجب أن تكون 6 أحرف على الأقل",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setIsSubmitting(true);
+    const { error } = await signUp(email, password, username || undefined);
+    setIsSubmitting(false);
+    
+    if (error) {
+      let message = error.message;
+      if (error.message.includes("already registered")) {
+        message = "هذا البريد الإلكتروني مسجل مسبقاً";
+      }
+      toast({
+        title: "خطأ في إنشاء الحساب",
+        description: message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "تم إنشاء الحساب بنجاح",
+        description: "يمكنك الآن تسجيل الدخول",
+      });
+      setActiveTab("login");
+    }
   };
 
   return (
@@ -69,78 +108,157 @@ export default function Landing() {
               </div>
             </div>
 
-            {/* Login Card */}
+            {/* Auth Card */}
             <Card className="border-0 shadow-2xl shadow-black/5 bg-card/80 backdrop-blur-sm">
               <CardContent className="p-8">
-                <div className="space-y-6">
-                  <div className="text-center space-y-2">
-                    <h2 className="text-2xl font-semibold">مرحباً بك</h2>
-                    <p className="text-sm text-muted-foreground">
-                      قم بتسجيل الدخول للوصول إلى لوحة التحكم
-                    </p>
-                  </div>
+                <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "login" | "signup")}>
+                  <TabsList className="grid w-full grid-cols-2 mb-6">
+                    <TabsTrigger value="login">تسجيل الدخول</TabsTrigger>
+                    <TabsTrigger value="signup">حساب جديد</TabsTrigger>
+                  </TabsList>
 
-                  <form onSubmit={handleSubmit} className="space-y-5">
-                    <div className="space-y-2">
-                      <Label htmlFor="username" className="text-sm font-medium">
-                        اسم المستخدم
-                      </Label>
-                      <div className="relative">
-                        <User className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                        <Input
-                          id="username"
-                          type="text"
-                          value={username}
-                          onChange={(e) => setUsername(e.target.value)}
-                          placeholder="أدخل اسم المستخدم"
-                          className="pr-11 h-12 text-base"
-                          dir="ltr"
-                          disabled={loginMutation.isPending}
-                          data-testid="input-username"
-                        />
+                  <TabsContent value="login">
+                    <form onSubmit={handleLogin} className="space-y-5">
+                      <div className="space-y-2">
+                        <Label htmlFor="email" className="text-sm font-medium">
+                          البريد الإلكتروني
+                        </Label>
+                        <div className="relative">
+                          <Mail className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                          <Input
+                            id="email"
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            placeholder="أدخل البريد الإلكتروني"
+                            className="pr-11 h-12 text-base"
+                            dir="ltr"
+                            disabled={isSubmitting}
+                            data-testid="input-email"
+                          />
+                        </div>
                       </div>
-                    </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="password" className="text-sm font-medium">
-                        كلمة المرور
-                      </Label>
-                      <div className="relative">
-                        <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                        <Input
-                          id="password"
-                          type="password"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="أدخل كلمة المرور"
-                          className="pr-11 h-12 text-base"
-                          dir="ltr"
-                          disabled={loginMutation.isPending}
-                          data-testid="input-password"
-                        />
+                      <div className="space-y-2">
+                        <Label htmlFor="password" className="text-sm font-medium">
+                          كلمة المرور
+                        </Label>
+                        <div className="relative">
+                          <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                          <Input
+                            id="password"
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="أدخل كلمة المرور"
+                            className="pr-11 h-12 text-base"
+                            dir="ltr"
+                            disabled={isSubmitting}
+                            data-testid="input-password"
+                          />
+                        </div>
                       </div>
-                    </div>
 
-                    <Button
-                      type="submit"
-                      className="w-full h-12 text-base font-medium"
-                      disabled={loginMutation.isPending}
-                      data-testid="button-login"
-                    >
-                      {loginMutation.isPending ? (
-                        <>
-                          <Loader2 className="ml-2 h-5 w-5 animate-spin" />
-                          جاري تسجيل الدخول...
-                        </>
-                      ) : (
-                        <>
-                          تسجيل الدخول
-                          <ArrowLeft className="mr-2 h-5 w-5" />
-                        </>
-                      )}
-                    </Button>
-                  </form>
-                </div>
+                      <Button
+                        type="submit"
+                        className="w-full h-12 text-base font-medium"
+                        disabled={isSubmitting}
+                        data-testid="button-login"
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <Loader2 className="ml-2 h-5 w-5 animate-spin" />
+                            جاري تسجيل الدخول...
+                          </>
+                        ) : (
+                          <>
+                            تسجيل الدخول
+                            <ArrowLeft className="mr-2 h-5 w-5" />
+                          </>
+                        )}
+                      </Button>
+                    </form>
+                  </TabsContent>
+
+                  <TabsContent value="signup">
+                    <form onSubmit={handleSignUp} className="space-y-5">
+                      <div className="space-y-2">
+                        <Label htmlFor="signup-username" className="text-sm font-medium">
+                          اسم المستخدم (اختياري)
+                        </Label>
+                        <div className="relative">
+                          <User className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                          <Input
+                            id="signup-username"
+                            type="text"
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            placeholder="أدخل اسم المستخدم"
+                            className="pr-11 h-12 text-base"
+                            dir="ltr"
+                            disabled={isSubmitting}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="signup-email" className="text-sm font-medium">
+                          البريد الإلكتروني
+                        </Label>
+                        <div className="relative">
+                          <Mail className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                          <Input
+                            id="signup-email"
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            placeholder="أدخل البريد الإلكتروني"
+                            className="pr-11 h-12 text-base"
+                            dir="ltr"
+                            disabled={isSubmitting}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="signup-password" className="text-sm font-medium">
+                          كلمة المرور
+                        </Label>
+                        <div className="relative">
+                          <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                          <Input
+                            id="signup-password"
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="أدخل كلمة المرور (6 أحرف على الأقل)"
+                            className="pr-11 h-12 text-base"
+                            dir="ltr"
+                            disabled={isSubmitting}
+                          />
+                        </div>
+                      </div>
+
+                      <Button
+                        type="submit"
+                        className="w-full h-12 text-base font-medium"
+                        disabled={isSubmitting}
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <Loader2 className="ml-2 h-5 w-5 animate-spin" />
+                            جاري إنشاء الحساب...
+                          </>
+                        ) : (
+                          <>
+                            إنشاء حساب
+                            <UserPlus className="mr-2 h-5 w-5" />
+                          </>
+                        )}
+                      </Button>
+                    </form>
+                  </TabsContent>
+                </Tabs>
               </CardContent>
             </Card>
 
