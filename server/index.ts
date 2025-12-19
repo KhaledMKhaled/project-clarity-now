@@ -87,7 +87,8 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  const port = parseInt(process.env.PORT || "8080", 10);
+  // Lovable preview expects the app on 8080
+  const port = 8080;
   httpServer.listen(
     {
       port,
