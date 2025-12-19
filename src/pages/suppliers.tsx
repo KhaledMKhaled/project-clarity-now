@@ -1,24 +1,20 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Users,
   Plus,
-  Search,
-  Edit,
+  Pencil,
   Trash2,
+  Building2,
   Phone,
   Mail,
   MapPin,
-  Building,
+  MoreHorizontal,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -26,29 +22,47 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Supplier, InsertSupplier } from "@shared/schema";
+import { supabase } from "@/integrations/supabase/client";
+import type { Supplier } from "@/types/database";
 
 export default function Suppliers() {
-  const [search, setSearch] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
-  const { data: suppliers, isLoading } = useQuery<Supplier[]>({
-    queryKey: ["/api/suppliers"],
+  const { data: suppliers, isLoading } = useQuery({
+    queryKey: ["suppliers"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("suppliers")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data as Supplier[];
+    },
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: InsertSupplier) => {
-      return apiRequest("POST", "/api/suppliers", data);
+    mutationFn: async (data: Partial<Supplier>) => {
+      const { error } = await supabase.from("suppliers").insert([data]);
+      if (error) throw error;
     },
     onSuccess: () => {
-      toast({ title: "تم إضافة المورد بنجاح" });
-      queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
+      queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       setIsDialogOpen(false);
-      setEditingSupplier(null);
+      toast({ title: "تم إضافة المورد بنجاح" });
     },
     onError: () => {
       toast({ title: "حدث خطأ", variant: "destructive" });
@@ -56,14 +70,15 @@ export default function Suppliers() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: number; data: Partial<InsertSupplier> }) => {
-      return apiRequest("PATCH", `/api/suppliers/${id}`, data);
+    mutationFn: async ({ id, data }: { id: number; data: Partial<Supplier> }) => {
+      const { error } = await supabase.from("suppliers").update(data).eq("id", id);
+      if (error) throw error;
     },
     onSuccess: () => {
-      toast({ title: "تم تحديث المورد بنجاح" });
-      queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
+      queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       setIsDialogOpen(false);
       setEditingSupplier(null);
+      toast({ title: "تم تحديث المورد بنجاح" });
     },
     onError: () => {
       toast({ title: "حدث خطأ", variant: "destructive" });
@@ -72,35 +87,28 @@ export default function Suppliers() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
-      return apiRequest("DELETE", `/api/suppliers/${id}`);
+      const { error } = await supabase.from("suppliers").delete().eq("id", id);
+      if (error) throw error;
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       toast({ title: "تم حذف المورد بنجاح" });
-      queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
     },
     onError: () => {
-      toast({ title: "حدث خطأ", variant: "destructive" });
+      toast({ title: "حدث خطأ في الحذف", variant: "destructive" });
     },
   });
-
-  const filteredSuppliers = suppliers?.filter(
-    (supplier) =>
-      !search ||
-      supplier.name.toLowerCase().includes(search.toLowerCase()) ||
-      supplier.country?.toLowerCase().includes(search.toLowerCase())
-  );
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const data: InsertSupplier = {
+    const data = {
       name: formData.get("name") as string,
-      description: (formData.get("description") as string) || null,
-      country: (formData.get("country") as string) || "الصين",
-      phone: (formData.get("phone") as string) || null,
-      email: (formData.get("email") as string) || null,
-      address: (formData.get("address") as string) || null,
-      isActive: formData.get("isActive") === "on",
+      description: formData.get("description") as string || null,
+      country: formData.get("country") as string || "الصين",
+      phone: formData.get("phone") as string || null,
+      email: formData.get("email") as string || null,
+      address: formData.get("address") as string || null,
     };
 
     if (editingSupplier) {
@@ -110,15 +118,15 @@ export default function Suppliers() {
     }
   };
 
-  const openEditDialog = (supplier: Supplier) => {
-    setEditingSupplier(supplier);
-    setIsDialogOpen(true);
-  };
+  const filteredSuppliers = suppliers?.filter(
+    (s) =>
+      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.country?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
-  const openNewDialog = () => {
-    setEditingSupplier(null);
-    setIsDialogOpen(true);
-  };
+  if (isLoading) {
+    return <SuppliersSkeleton />;
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -126,18 +134,16 @@ export default function Suppliers() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold">الموردون</h1>
-          <p className="text-muted-foreground mt-1">
-            إضافة وتعديل بيانات الموردين المرتبطين بكل صنف
-          </p>
+          <p className="text-muted-foreground mt-1">إدارة الموردين والمصانع</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
-            <Button onClick={openNewDialog} data-testid="button-add-supplier">
+            <Button onClick={() => setEditingSupplier(null)}>
               <Plus className="w-4 h-4 ml-2" />
-              إضافة مورد جديد
+              إضافة مورد
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-md">
+          <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>
                 {editingSupplier ? "تعديل المورد" : "إضافة مورد جديد"}
@@ -149,38 +155,38 @@ export default function Suppliers() {
                 <Input
                   id="name"
                   name="name"
-                  defaultValue={editingSupplier?.name || ""}
+                  defaultValue={editingSupplier?.name}
                   required
-                  data-testid="input-supplier-name"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="country">البلد</Label>
+                <Label htmlFor="country">الدولة</Label>
                 <Input
                   id="country"
                   name="country"
                   defaultValue={editingSupplier?.country || "الصين"}
-                  data-testid="input-supplier-country"
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="phone">الهاتف</Label>
-                <Input
-                  id="phone"
-                  name="phone"
-                  defaultValue={editingSupplier?.phone || ""}
-                  data-testid="input-supplier-phone"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="email">البريد الإلكتروني</Label>
-                <Input
-                  id="email"
-                  name="email"
-                  type="email"
-                  defaultValue={editingSupplier?.email || ""}
-                  data-testid="input-supplier-email"
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="phone">الهاتف</Label>
+                  <Input
+                    id="phone"
+                    name="phone"
+                    defaultValue={editingSupplier?.phone || ""}
+                    dir="ltr"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="email">البريد الإلكتروني</Label>
+                  <Input
+                    id="email"
+                    name="email"
+                    type="email"
+                    defaultValue={editingSupplier?.email || ""}
+                    dir="ltr"
+                  />
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="address">العنوان</Label>
@@ -188,45 +194,26 @@ export default function Suppliers() {
                   id="address"
                   name="address"
                   defaultValue={editingSupplier?.address || ""}
-                  rows={2}
-                  data-testid="input-supplier-address"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="description">الوصف</Label>
+                <Label htmlFor="description">ملاحظات</Label>
                 <Textarea
                   id="description"
                   name="description"
                   defaultValue={editingSupplier?.description || ""}
-                  rows={2}
-                  data-testid="input-supplier-description"
                 />
               </div>
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="isActive"
-                  name="isActive"
-                  defaultChecked={editingSupplier?.isActive ?? true}
-                />
-                <Label htmlFor="isActive">نشط</Label>
-              </div>
-              <div className="flex gap-2 pt-4">
-                <Button
-                  type="submit"
-                  className="flex-1"
-                  disabled={createMutation.isPending || updateMutation.isPending}
-                  data-testid="button-save-supplier"
-                >
-                  {createMutation.isPending || updateMutation.isPending
-                    ? "جاري الحفظ..."
-                    : "حفظ"}
-                </Button>
+              <div className="flex justify-end gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => setIsDialogOpen(false)}
                 >
                   إلغاء
+                </Button>
+                <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                  {editingSupplier ? "تحديث" : "إضافة"}
                 </Button>
               </div>
             </form>
@@ -235,129 +222,119 @@ export default function Suppliers() {
       </div>
 
       {/* Search */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="relative max-w-md">
-            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="بحث بالاسم أو البلد..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pr-10"
-              data-testid="input-search-suppliers"
-            />
-          </div>
-        </CardContent>
-      </Card>
+      <div className="relative max-w-sm">
+        <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <Input
+          placeholder="بحث عن مورد..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pr-10"
+        />
+      </div>
 
       {/* Suppliers Grid */}
-      {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <Skeleton key={i} className="h-48" />
-          ))}
-        </div>
-      ) : filteredSuppliers && filteredSuppliers.length > 0 ? (
+      {filteredSuppliers && filteredSuppliers.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredSuppliers.map((supplier) => (
-            <Card
-              key={supplier.id}
-              className="hover-elevate"
-              data-testid={`card-supplier-${supplier.id}`}
-            >
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between gap-2">
+            <Card key={supplier.id} className="relative">
+              <CardContent className="p-6">
+                <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-md bg-primary/10 flex items-center justify-center">
-                      <Building className="w-5 h-5 text-primary" />
+                    <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <Building2 className="w-6 h-6 text-primary" />
                     </div>
                     <div>
-                      <CardTitle className="text-lg">{supplier.name}</CardTitle>
-                      <div className="flex items-center gap-2 mt-1">
-                        <MapPin className="w-3 h-3 text-muted-foreground" />
-                        <span className="text-sm text-muted-foreground">
-                          {supplier.country || "الصين"}
-                        </span>
-                      </div>
+                      <h3 className="font-semibold">{supplier.name}</h3>
+                      <Badge variant="outline" className="mt-1">
+                        {supplier.country}
+                      </Badge>
                     </div>
                   </div>
-                  <Badge
-                    variant={supplier.isActive ? "default" : "secondary"}
-                    className={
-                      supplier.isActive
-                        ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-                        : ""
-                    }
-                  >
-                    {supplier.isActive ? "نشط" : "غير نشط"}
-                  </Badge>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon">
+                        <MoreHorizontal className="w-4 h-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setEditingSupplier(supplier);
+                          setIsDialogOpen(true);
+                        }}
+                      >
+                        <Pencil className="w-4 h-4 ml-2" />
+                        تعديل
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-destructive"
+                        onClick={() => deleteMutation.mutate(supplier.id)}
+                      >
+                        <Trash2 className="w-4 h-4 ml-2" />
+                        حذف
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {supplier.description && (
-                  <p className="text-sm text-muted-foreground line-clamp-2">
-                    {supplier.description}
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+                <div className="mt-4 space-y-2 text-sm text-muted-foreground">
                   {supplier.phone && (
-                    <div className="flex items-center gap-1">
-                      <Phone className="w-3 h-3" />
-                      <span>{supplier.phone}</span>
+                    <div className="flex items-center gap-2">
+                      <Phone className="w-4 h-4" />
+                      <span dir="ltr">{supplier.phone}</span>
                     </div>
                   )}
                   {supplier.email && (
-                    <div className="flex items-center gap-1">
-                      <Mail className="w-3 h-3" />
-                      <span>{supplier.email}</span>
+                    <div className="flex items-center gap-2">
+                      <Mail className="w-4 h-4" />
+                      <span dir="ltr">{supplier.email}</span>
                     </div>
                   )}
-                </div>
-                <div className="flex gap-2 pt-2 border-t">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    onClick={() => openEditDialog(supplier)}
-                    data-testid={`button-edit-supplier-${supplier.id}`}
-                  >
-                    <Edit className="w-4 h-4 ml-1" />
-                    تعديل
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-destructive"
-                    onClick={() => deleteMutation.mutate(supplier.id)}
-                    disabled={deleteMutation.isPending}
-                    data-testid={`button-delete-supplier-${supplier.id}`}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  {supplier.address && (
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4" />
+                      <span>{supplier.address}</span>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
           ))}
         </div>
       ) : (
-        <Card>
-          <CardContent className="py-16">
-            <div className="flex flex-col items-center justify-center text-center">
-              <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mb-6">
-                <Users className="w-10 h-10 text-muted-foreground" />
-              </div>
-              <h3 className="text-xl font-medium mb-2">لا يوجد موردون</h3>
-              <p className="text-muted-foreground mb-6">
-                ابدأ بإضافة موردك الأول لربطه بالأصناف
-              </p>
-              <Button onClick={openNewDialog}>
-                <Plus className="w-4 h-4 ml-2" />
-                إضافة مورد جديد
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
+            <Building2 className="w-8 h-8 text-muted-foreground" />
+          </div>
+          <h3 className="font-medium text-lg mb-1">لا يوجد موردون</h3>
+          <p className="text-sm text-muted-foreground">ابدأ بإضافة مورد جديد</p>
+        </div>
       )}
+    </div>
+  );
+}
+
+function SuppliersSkeleton() {
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <Skeleton className="h-8 w-32 mb-2" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+        <Skeleton className="h-10 w-32" />
+      </div>
+      <Skeleton className="h-10 w-64" />
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <Card key={i}>
+            <CardContent className="p-6">
+              <Skeleton className="h-12 w-full mb-4" />
+              <Skeleton className="h-4 w-full mb-2" />
+              <Skeleton className="h-4 w-3/4" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }

@@ -5,34 +5,83 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import type { Shipment } from "@shared/schema";
+import { supabase } from "@/integrations/supabase/client";
+import type { Shipment } from "@/types/database";
 
 interface DashboardStats {
   totalShipments: number;
-  totalCostEgp: string;
-  totalPaidEgp: string;
-  totalBalanceEgp: string;
-  totalOverpaidEgp: string;
+  totalCostEgp: number;
+  totalPaidEgp: number;
+  totalBalanceEgp: number;
+  totalOverpaidEgp: number;
   recentShipments: Shipment[];
   pendingShipments: number;
   completedShipments: number;
 }
 
+async function fetchDashboardStats(): Promise<DashboardStats> {
+  const { data: shipments, error } = await supabase
+    .from("shipments")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+
+  const allShipments = shipments || [];
+  
+  let totalCostEgp = 0;
+  let totalPaidEgp = 0;
+  let totalBalanceEgp = 0;
+  let totalOverpaidEgp = 0;
+  let pendingShipments = 0;
+  let completedShipments = 0;
+
+  allShipments.forEach((s) => {
+    const cost = Number(s.final_total_cost_egp) || 0;
+    const paid = Number(s.total_paid_egp) || 0;
+    totalCostEgp += cost;
+    totalPaidEgp += paid;
+    
+    if (paid > cost) {
+      totalOverpaidEgp += paid - cost;
+    } else {
+      totalBalanceEgp += cost - paid;
+    }
+
+    if (s.status === "مستلمة بنجاح") {
+      completedShipments++;
+    } else {
+      pendingShipments++;
+    }
+  });
+
+  return {
+    totalShipments: allShipments.length,
+    totalCostEgp,
+    totalPaidEgp,
+    totalBalanceEgp,
+    totalOverpaidEgp,
+    recentShipments: allShipments.slice(0, 5),
+    pendingShipments,
+    completedShipments,
+  };
+}
+
 export default function Dashboard() {
   const { data: stats, isLoading } = useQuery<DashboardStats>({
-    queryKey: ["/api/dashboard/stats"],
+    queryKey: ["dashboard-stats"],
+    queryFn: fetchDashboardStats,
   });
 
   if (isLoading) {
     return <DashboardSkeleton />;
   }
 
-  const formatCurrency = (value: string | number) => {
-    const num = typeof value === "string" ? parseFloat(value) : value;
+  const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("ar-EG", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    }).format(num || 0);
+    }).format(value || 0);
   };
 
   return (
@@ -75,13 +124,13 @@ export default function Dashboard() {
         <StatCard
           title="المتبقي"
           value={`${formatCurrency(stats?.totalBalanceEgp || 0)} ج.م`}
-          icon={parseFloat(stats?.totalBalanceEgp || "0") > 0 ? TrendingDown : TrendingUp}
+          icon={(stats?.totalBalanceEgp || 0) > 0 ? TrendingDown : TrendingUp}
           subtitle={
-            parseFloat(stats?.totalOverpaidEgp || "0") > 0
+            (stats?.totalOverpaidEgp || 0) > 0
               ? `مدفوع زيادة: ${formatCurrency(stats?.totalOverpaidEgp || 0)} ج.م`
               : "المبلغ المستحق"
           }
-          trend={parseFloat(stats?.totalBalanceEgp || "0") > 0 ? "down" : "up"}
+          trend={(stats?.totalBalanceEgp || 0) > 0 ? "down" : "up"}
         />
       </div>
 
@@ -101,7 +150,7 @@ export default function Dashboard() {
                 {stats.recentShipments.map((shipment) => (
                   <div
                     key={shipment.id}
-                    className="flex items-center justify-between gap-4 p-4 rounded-md border bg-card hover-elevate"
+                    className="flex items-center justify-between gap-4 p-4 rounded-md border bg-card hover:bg-accent/50 transition-colors"
                     data-testid={`shipment-row-${shipment.id}`}
                   >
                     <div className="flex items-center gap-4">
@@ -109,9 +158,9 @@ export default function Dashboard() {
                         <Ship className="w-5 h-5 text-primary" />
                       </div>
                       <div>
-                        <p className="font-medium">{shipment.shipmentName}</p>
+                        <p className="font-medium">{shipment.shipment_name}</p>
                         <p className="text-sm text-muted-foreground">
-                          {shipment.shipmentCode}
+                          {shipment.shipment_code}
                         </p>
                       </div>
                     </div>
@@ -119,12 +168,12 @@ export default function Dashboard() {
                       <StatusBadge status={shipment.status} />
                       <div className="text-left">
                         <p className="font-medium">
-                          {formatCurrency(shipment.finalTotalCostEgp || 0)} ج.م
+                          {formatCurrency(Number(shipment.final_total_cost_egp) || 0)} ج.م
                         </p>
                         <p className="text-sm text-muted-foreground">
                           {(() => {
-                            const cost = parseFloat(shipment.finalTotalCostEgp || "0");
-                            const paid = parseFloat(shipment.totalPaidEgp || "0");
+                            const cost = Number(shipment.final_total_cost_egp) || 0;
+                            const paid = Number(shipment.total_paid_egp) || 0;
                             const remaining = Math.max(0, cost - paid);
                             const overpaid = Math.max(0, paid - cost);
 
